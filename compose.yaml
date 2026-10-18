@@ -1,0 +1,20 @@
+services:
+  archiver:
+    build: .
+    restart: unless-stopped
+    init: true
+    environment:
+      TG_API_ID: ${TG_API_ID:?Set TG_API_ID}
+      TG_API_HASH: ${TG_API_HASH:?Set TG_API_HASH}
+    volumes:
+      - ./data:/app/data
+      - ./config.toml:/app/config.toml:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3

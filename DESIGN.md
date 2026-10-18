@@ -1,6 +1,6 @@
 # Implementation design
 
-Status: proposed for final review; no application code authorized yet.
+Status: approved and implemented; dependency-based runtime verification is pending because this session cannot download packages.
 
 ## Runtime
 

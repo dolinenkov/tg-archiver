@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tg-archiver"
+version = "0.1.0"
+description = "A small, personal Telegram cloud-history archive"
+requires-python = ">=3.12"
+dependencies = [
+  "Telethon>=1.40,<2",
+  "SQLAlchemy[asyncio]>=2.0,<3",
+  "aiosqlite>=0.20,<1",
+  "aiohttp>=3.11,<4",
+]
+
+[project.scripts]
+tg-archiver = "tg_archiver.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["tg_archiver*"]

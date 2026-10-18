@@ -33,4 +33,4 @@
 
 ## Review gate
 
-The user has accepted the recommended behavior above. A concrete implementation design remains to be reviewed before application code is written.
+The user approved the design, including async SQLAlchemy, and authorized implementation.
