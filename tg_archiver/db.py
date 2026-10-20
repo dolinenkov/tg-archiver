@@ -33,6 +33,17 @@ class Chat(Base):
     catchup_pending: Mapped[bool] = mapped_column(default=False)
 
 
+class Avatar(Base):
+    __tablename__ = "avatars"
+    chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id"), primary_key=True)
+    photo_id: Mapped[str] = mapped_column(default="")
+    downloaded_photo_id: Mapped[str] = mapped_column(default="")
+    path: Mapped[str | None] = mapped_column()
+    retry_at: Mapped[float] = mapped_column(default=0.0)
+    attempts: Mapped[int] = mapped_column(default=0)
+    error: Mapped[str] = mapped_column(default="")
+
+
 class Sender(Base):
     __tablename__ = "senders"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
@@ -139,5 +150,6 @@ class Database:
     async def retry(self):
         async with self.write() as session:
             await session.execute(text("UPDATE attachments SET state='pending', attempts=0, retry_at=0, error='' WHERE state IN ('error','unavailable')"))
+            await session.execute(text("UPDATE avatars SET attempts=0, retry_at=0, error='' WHERE error != ''"))
             for chat in (await session.scalars(select(Chat).where(Chat.error != ""))).all():
                 chat.error = ""

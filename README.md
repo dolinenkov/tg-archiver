@@ -95,15 +95,25 @@ Restart after configuration changes. Exclusions stop future collection/downloads
 
 ## Browse and search
 
-- `/`: chats, including excluded chats with existing archive data.
-- `/chat/ID`: paginated messages, sender labels, reply links, album IDs, captured versions, attachments.
+The web UI uses a Telegram-style layout: a persistent chat sidebar with message previews, an independent conversation pane, and light/dark themes. On mobile, the chat list and conversation use separate views. Selecting chats and submitting search updates the main pane without reloading the sidebar; regular links also work without JavaScript. Conversations read oldest to newest and open at the latest message. Scroll upward to load older history while keeping your reading position.
+
+Current contact/group/channel avatars download in the background and are cached as `avatars/<chat_id>.jpg` inside the data directory. Discovery on startup and hourly checks for changed or removed photos; unchanged photos are reused. Excluded chats do not fetch new photos. The UI refreshes visible avatars automatically, with initials as a fallback. Only the current small profile photo is cached; profile-photo history is not collected. Failed avatar downloads honor flood waits and retry with backoff; `tg-archiver retry` also resets their retries.
+
+- `/`: chats ordered by their newest archived message, including excluded chats with existing archive data. Chats without messages appear last.
+- `/chat/ID`: messages in chronological order, opening at the latest message, sender labels, reply links, album IDs, captured versions, attachments.
 - `/search`: English/Russian case-insensitive words or quoted phrases, chat and date filters. Dates refer to the original message in UTC. Search includes older captured versions, with links to the matching version.
 - `/status`: connection state, history progress, reconciliation timestamps, download states, flood waits, and errors.
 - `/health`: database/process health; HTTP 503 on a fatal collection storage error. A healthy process does not guarantee Telegram authorization or connectivity; inspect `/status` too.
 
 Messages are plain escaped text with clickable HTTP(S) links. Supported image/audio/video types use native browser playback; unsupported codecs and other files can be downloaded. Polls, locations, contacts, and other specialized types have a structured metadata fallback. Consecutive album messages are grouped within each page; the UI does not recreate Telegram's visual layout. No OCR, transcription, fuzzy search, stemming, or search inside attachment files.
 
+Chats and search results load more as you scroll down; conversations load older messages as you scroll up, in batches of 50. Search filters remain active. A Load more link also works without JavaScript and lets you retry failed requests.
+
 ## Recovery and limits
+
+Private chats (including Saved Messages) come first in each history, offline catch-up, and reconciliation pass; history still rotates through all included chats. Their attachments take priority over group/channel attachments. Within each category, recent live attachments are preferred, with every tenth download preferring older work. A running request or download is not interrupted when private-chat work arrives.
+
+Attachments larger than 10 MB (10 × 1024 × 1024 bytes) wait until all enabled chats have exhausted accessible history and offline catch-up, and the text worker is idle. Chats with reported history errors do not block this indefinitely. Eligible smaller attachments always come first, ahead of private-chat priority. Large files pause at the next download boundary when new text collection work starts; files already downloading finish normally. Unknown-size attachments are treated as small until their size is known.
 
 Telethon receives pushed updates, reconnects, and attempts catch-up. On reconnection, the archiver also scans accessible messages newer than the saved pre-connection boundary, so new live messages do not hide an offline gap. Historical work rotates between chats. Channel/supergroup backfill requests explicit message-ID batches, avoiding the documented old-history message-box limit of `getHistory`; missing/inaccessible IDs cannot be reconstructed. A finished scan means the available API range was exhausted, not proof that every message ever sent was recovered.
 
@@ -129,6 +139,8 @@ Secret chats are device-specific and excluded. Stories, calls, drafts, scheduled
 
 ## Protect and back up the archive
 
+New attachments are stored as `media/<chat_id>/<attachment_id><extension>`, preserving the original filename extension when safe. Files without an extension use one inferred from their MIME type, or `.bin` when unknown. Shared media is stored once under the chat used to download it. Existing downloaded files retain their recorded paths and remain accessible.
+
 There is no built-in web authentication. Keep the listener on localhost or use your secured reverse proxy/tunnel. The entire archive is private, and the Telegram session grants account access. The web server exposes attachment IDs, never the database, configuration, or session directory. Unix files are created with a private umask; on Windows restrict the data directory's ACL to your account. The application does not encrypt data; use disk/backup encryption if required.
 
 For a consistent backup:
@@ -140,6 +152,19 @@ For a consistent backup:
 Restore into an empty directory, restore configuration/credentials, and run the same application version. Do not copy only a running SQLite database file. Session backups should not be started simultaneously on different servers.
 
 ## Development checks
+
+Python renders autoescaped Jinja2 templates in `tg_archiver/templates/`. The frontend is custom CSS and TypeScript in `frontend/`, built with Vite; no frontend framework or Node server is used at runtime. Built assets in `tg_archiver/static/` are included in Python packages and committed so native installation works without Node.
+
+To change the frontend, install Node.js 22.12+ (or a supported newer release):
+
+```sh
+npm ci
+npm run build  # type-check and rebuild packaged assets
+# During development, rebuild assets as files change; refresh the browser:
+npm run dev
+```
+
+Run `npm run build` after frontend changes and include the updated static files. Docker uses a Node build stage and serves the result from the Python application.
 
 ```sh
 python -m unittest discover -s tests -v

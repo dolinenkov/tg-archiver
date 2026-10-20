@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# data directory
+data/
+
+# Frontend dependencies (built static assets are included in Python packages)
+node_modules/

@@ -1,0 +1,17 @@
+{% macro icon(name, size=20) -%}
+<svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+{% if name == 'plane' %}<path d="m21 3-7 18-4-7-7-4L21 3Z"/><path d="m10 14 5-5"/>
+{% elif name == 'search' %}<circle cx="10.8" cy="10.8" r="7"/><path d="m16 16 5 5"/>
+{% elif name == 'chats' %}<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2V11.5a9.5 9.5 0 0 1 19 0Z"/><path d="M7 9h10M7 13h6"/>
+{% elif name == 'activity' %}<path d="M3 12h4l3-8 4 16 3-8h4"/>
+{% elif name == 'moon' %}<path d="M21 13a9 9 0 1 1-10-10 7 7 0 0 0 10 10Z"/>
+{% elif name == 'back' %}<path d="m14 5-7 7 7 7"/>
+{% elif name == 'lock' %}<rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/>
+{% elif name == 'file' %}<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h5"/>
+{% elif name == 'check' %}<path d="m3 12 5 5L19 6m-6 11 8-8"/>
+{% elif name == 'arrow' %}<path d="M12 4v16m-6-6 6 6 6-6"/>
+{% endif %}</svg>
+{%- endmacro %}
+{% macro avatar(title, id, large=false) -%}
+<span class="avatar color-{{ id|abs % 7 }} {{ 'avatar-large' if large else '' }}" aria-hidden="true" data-avatar-chat="{{ id }}" data-avatar-version="{{ avatar_versions.get(id, '') }}"><span>{{ initials(title) }}</span>{% if avatar_versions.get(id) %}<img src="/avatar/{{ id }}?v={{ avatar_versions[id] }}" alt="" loading="lazy" decoding="async" data-avatar-image>{% endif %}</span>
+{%- endmacro %}

@@ -4,7 +4,7 @@ Status: approved and implemented; dependency-based runtime verification is pendi
 
 ## Runtime
 
-Python 3.12 or newer. One process and one asyncio event loop run Telethon, an aiohttp web server, and background collection tasks. Use SQLAlchemy's async engine and straightforward mapped models, with aiosqlite as the SQLite driver. Give each concurrent task or request its own short-lived AsyncSession; never share a session across concurrent tasks. Use explicit queries rather than implicit lazy loading. Keep FTS5-specific SQL explicit and execute it through SQLAlchemy. Use ordinary functions and small modules for configuration, storage, collection, web views, and the command entry point; no repository or service layers, external queue, or frontend build.
+Python 3.12 or newer. One process and one asyncio event loop run Telethon, an aiohttp web server, and background collection tasks. Use SQLAlchemy's async engine and straightforward mapped models, with aiosqlite as the SQLite driver. Give each concurrent task or request its own short-lived AsyncSession; never share a session across concurrent tasks. Use explicit queries rather than implicit lazy loading. Keep FTS5-specific SQL explicit and execute it through SQLAlchemy. Use ordinary functions and small modules for configuration, storage, collection, web views, and the command entry point; no repository or service layers or external queue.
 
 Provide terminal commands to log in, list chats and their stable IDs, and run the application. Login prompts never occur during unattended operation. Use a TOML configuration file and environment variables for Telegram API credentials. The Telegram session is a separate private file, never accessible through the web server. Only one archiver process may own a data directory.
 
@@ -32,7 +32,9 @@ Secret chats, stories, calls, scheduled drafts, and profile-photo history are ou
 
 ## Web interface
 
-Server-rendered, escaped HTML and a small stylesheet; no SPA or frontend build. Chat list, paginated conversation view, search, expandable versions, and status. Support replies, albums, safe links, images, and native browser audio/video playback when the format permits. Other attachments download. Render untrusted active formats as downloads, never executable inline content. Resolve attachment requests through database IDs and prevent paths escaping the attachment root.
+Cache current small chat/user profile photos separately from message attachments, using one background worker and a durable queue keyed by chat ID and Telegram photo ID. Discovery detects photo changes/removal; unchanged cached photos avoid repeat downloads. Replace files atomically, honor exclusions and shared flood waits, and preserve initials when a photo is unavailable. Serve images through chat-ID routes with path checks. This is a current-photo cache, not profile-photo history.
+
+Server-rendered, autoescaped Jinja2 templates with custom CSS and a small TypeScript client compiled by Vite; no frontend framework or separate runtime server. A persistent chat sidebar and independent conversation pane share the same Python backend; built assets are packaged with the application. Chat list, paginated conversation view, search, expandable versions, and status. Support replies, albums, safe links, images, and native browser audio/video playback when the format permits. Other attachments download. Render untrusted active formats as downloads, never executable inline content. Resolve attachment requests through database IDs and prevent paths escaping the attachment root.
 
 Status reports connection/auth state, per-chat backfill progress, last reconciliation, attachment backlog, flood waits, and errors. Collection errors do not silently disappear. Existing archive views remain available during recoverable Telegram failures or revoked authorization. The application cannot send Telegram messages or edit/delete source messages; avoid marking conversations read.
 

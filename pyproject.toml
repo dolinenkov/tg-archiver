@@ -12,6 +12,7 @@ dependencies = [
   "SQLAlchemy[asyncio]>=2.0,<3",
   "aiosqlite>=0.20,<1",
   "aiohttp>=3.11,<4",
+  "Jinja2>=3.1.6,<4",
 ]
 
 [project.scripts]
@@ -19,3 +20,6 @@ tg-archiver = "tg_archiver.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["tg_archiver*"]
+
+[tool.setuptools.package-data]
+tg_archiver = ["templates/*.html", "static/*"]

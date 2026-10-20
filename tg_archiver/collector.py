@@ -1,6 +1,9 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
+import mimetypes
+from pathlib import PureWindowsPath
+import re
 import time
 
 from sqlalchemy import func, select
@@ -8,12 +11,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from telethon import TelegramClient, errors, events, types
 
 from .archive import media_info, save_deletions, save_message
+from .avatars import cached_file, photo_id
 from .config import credentials
-from .db import Attachment, Chat, Message, Setting, Version, VersionAttachment, now
+from .db import Attachment, Avatar, Chat, Message, Setting, Version, VersionAttachment, now
 
 
 log = logging.getLogger(__name__)
 STORAGE_ERRNOS = {1, 5, 13, 28, 30, 122} # permissions, I/O, full/read-only disk, quota
+LARGE_ATTACHMENT_BYTES = 10 * 1024 * 1024
 
 
 def client_for(config):
@@ -34,13 +39,15 @@ class Collector:
         self.history_requests = 0
         self.download_count = 0
         self.verified = False
+        self.text_idle = False
 
     async def start(self):
         self.client.add_event_handler(self.on_message, events.NewMessage())
         self.client.add_event_handler(self.on_message, events.MessageEdited())
         self.client.add_event_handler(self.on_delete, events.MessageDeleted())
         self.tasks = [asyncio.create_task(self.guard(name, work), name=name) for name, work in [
-            ("connection", self.connection), ("history", self.history), ("attachments", self.downloads)]]
+            ("connection", self.connection), ("history", self.history), ("attachments", self.downloads),
+            ("avatars", self.avatars)]]
 
     async def stop(self):
         for task in self.tasks:
@@ -175,24 +182,109 @@ class Collector:
                 if not chat:
                     chat = Chat(id=dialog.id, kind=type(dialog.entity).__name__, title=dialog.name or str(dialog.id))
                     session.add(chat)
+                    await session.flush()
                 chat.title = dialog.name or str(dialog.id)
                 chat.kind = type(dialog.entity).__name__
                 chat.enabled = self.config.included(dialog.id)
                 if chat.config_hash != fingerprint:
                     chat.cursor, chat.done, chat.error = 0, False, ""
                     chat.config_hash = fingerprint
+                if chat.enabled:
+                    await self.queue_avatar(session, chat.id, dialog.entity)
         await self.db.set_status("discovered", now())
+
+    async def queue_avatar(self, session, chat_id, entity):
+        current_id = photo_id(entity)
+        item = await session.get(Avatar, chat_id)
+        if not item:
+            if current_id:
+                session.add(Avatar(chat_id=chat_id, photo_id=current_id))
+            return
+        if current_id != item.photo_id:
+            item.photo_id, item.retry_at, item.attempts, item.error = current_id, 0, 0, ""
+        if not current_id or (item.path and not cached_file(self.config.data_dir, item.path)):
+            item.path, item.downloaded_photo_id = None, ""
+
+    async def avatars(self):
+        while True:
+            await self.wait_api()
+            async with self.db.session() as session:
+                item = await session.scalar(select(Avatar).join(Chat).where(
+                    Chat.enabled.is_(True), Avatar.photo_id != "", Avatar.retry_at <= time.time(),
+                    (Avatar.path.is_(None) | (Avatar.downloaded_photo_id != Avatar.photo_id)))
+                    .order_by((Chat.id > 0).desc(), Avatar.chat_id).limit(1))
+            if not item:
+                await asyncio.sleep(5)
+                continue
+            if self.config.included(item.chat_id):
+                await self.download_avatar(item)
+            else:
+                async with self.db.write() as session:
+                    (await session.get(Chat, item.chat_id)).enabled = False
+            await asyncio.sleep(1)
+
+    async def download_avatar(self, item):
+        if not self.config.included(item.chat_id):
+            return
+        relative = f"{item.chat_id}.jpg"
+        target = self.config.data_dir / "avatars" / relative
+        partial = target.with_name(target.stem + ".part.jpg")
+        try:
+            await self.wait_api()
+            entity = await self.client.get_entity(item.chat_id)
+            async with self.db.write() as session:
+                current = await session.get(Avatar, item.chat_id)
+                if current.photo_id != item.photo_id:
+                    return
+                await self.queue_avatar(session, item.chat_id, entity)
+            if photo_id(entity) != item.photo_id:
+                return
+            await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
+            result = await self.client.download_profile_photo(entity, file=str(partial), download_big=False)
+            if not result or not partial.is_file() or not partial.stat().st_size:
+                raise OSError("Profile photo unavailable")
+            async with self.db.write() as session:
+                current = await session.get(Avatar, item.chat_id)
+                # Discovery may have observed a changed/removed photo during the download.
+                if current.photo_id != item.photo_id or not self.config.included(item.chat_id):
+                    return
+                await asyncio.to_thread(partial.replace, target)
+                current.path, current.downloaded_photo_id = relative, item.photo_id
+                current.retry_at, current.attempts, current.error = 0, 0, ""
+        except errors.FloodWaitError as error:
+            await self.flood(error)
+            await self.retry_avatar(item, "Telegram flood wait", self.flood_until)
+        except (SQLAlchemyError, OSError) as error:
+            if isinstance(error, SQLAlchemyError) or getattr(error, "errno", None) in STORAGE_ERRNOS:
+                raise
+            await self.retry_avatar(item, type(error).__name__)
+        except Exception as error:
+            await self.retry_avatar(item, type(error).__name__)
+        finally:
+            await asyncio.to_thread(partial.unlink, missing_ok=True)
+
+    async def retry_avatar(self, item, error, retry_at=None):
+        async with self.db.write() as session:
+            current = await session.get(Avatar, item.chat_id)
+            if current.photo_id != item.photo_id:
+                return
+            current.attempts += 1
+            current.error = error
+            current.retry_at = retry_at if retry_at is not None else time.time() + min(3600, 2 ** min(current.attempts + 2, 12))
+        await self.db.set_status("last_error", f"{now()} avatar {item.chat_id}: {error}")
 
     async def history(self):
         discovered = reconciled = float("-inf")
         while True:
+            self.text_idle = False
             await self.wait_api()
             try:
                 if time.monotonic() - discovered >= self.config.discovery_seconds:
                     await self.discover()
                     discovered = time.monotonic()
                 async with self.db.session() as session:
-                    chats = (await session.scalars(select(Chat).where(Chat.enabled.is_(True)).order_by(Chat.id))).all()
+                    chats = (await session.scalars(select(Chat).where(Chat.enabled.is_(True))
+                             .order_by((Chat.id > 0).desc(), Chat.id))).all()
                 pending = False
                 for chat in chats:
                     if chat.catchup_pending and not chat.error and self.config.included(chat.id):
@@ -207,6 +299,7 @@ class Collector:
                         if self.config.included(chat.id):
                             await self.reconcile(chat)
                     reconciled = time.monotonic()
+                self.text_idle = True
                 await asyncio.sleep(1 if pending else 10)
             except errors.FloodWaitError as error:
                 await self.flood(error)
@@ -322,7 +415,22 @@ class Collector:
             await self.wait_api()
             async with self.db.session() as session:
                 query = select(Attachment).where(Attachment.state.in_(["pending", "error"]), Attachment.retry_at <= time.time())
-                # Every tenth item prefers old history so live traffic cannot starve it.
+                unfinished = await session.scalar(select(Chat.id).where(
+                    Chat.enabled.is_(True), Chat.error == "",
+                    (Chat.done.is_(False) | Chat.catchup_pending.is_(True))).limit(1))
+                if not getattr(self, "text_idle", False) or unfinished is not None:
+                    query = query.where(Attachment.size <= LARGE_ATTACHMENT_BYTES)
+                # Large files come after all eligible smaller files, even from private chats.
+                query = query.order_by((Attachment.size > LARGE_ATTACHMENT_BYTES))
+                # Positive marked IDs identify private chats, including Saved Messages.
+                private_source = (select(VersionAttachment.attachment_id)
+                                  .join(Version, Version.id == VersionAttachment.version_id)
+                                  .join(Message, Message.id == Version.message_id)
+                                  .join(Chat, Chat.id == Message.chat_id)
+                                  .where(VersionAttachment.attachment_id == Attachment.id,
+                                         Chat.id > 0, Chat.enabled.is_(True)).exists())
+                query = query.order_by(private_source.desc())
+                # Within each chat category, every tenth item prefers old history.
                 if self.download_count % 10:
                     query = query.order_by(Attachment.priority.desc(), Attachment.id)
                 else:
@@ -340,10 +448,9 @@ class Collector:
         if not allowed:
             await self.finish(item.id, "skipped")
             return
-        relative = f"{item.id // 1000}/{item.id}.bin"
-        target = self.config.data_dir / "media" / relative
-        partial = target.with_suffix(".part")
-        await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
+        extension = PureWindowsPath(item.name).suffix
+        if not re.fullmatch(r"\.[A-Za-z0-9_-]{1,32}", extension):
+            extension = mimetypes.guess_extension(item.mime) or ".bin"
         await self.finish(item.id, "downloading")
         try:
             found = False
@@ -357,6 +464,10 @@ class Collector:
                         continue
                     if getattr(entity, "noforwards", False) or getattr(message, "noforwards", False):
                         continue
+                    relative = f"{source.chat_id}/{item.id}{extension}"
+                    target = self.config.data_dir / "media" / relative
+                    partial = target.with_name(target.name + ".part")
+                    await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
                     # Refetching the message also refreshes expired file references.
                     result = await self.client.download_media(message, file=str(partial))
                     if not result:

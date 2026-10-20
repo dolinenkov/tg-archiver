@@ -1,0 +1,24 @@
+[archive]
+data_dir = "data"
+host = "127.0.0.1"
+port = 8080
+discovery_seconds = 3600
+reconcile_seconds = 86400
+reconcile_days = 7
+max_file_bytes = 0 # 0 = no size cap
+excluded_chats = [] # stable numeric IDs from the chats command
+
+[media]
+photos = true
+videos = true
+voice = true
+video_notes = true
+audio = true
+stickers = true # includes animations/GIFs
+files = true
+
+# [chats."-1001234567890"]
+# enabled = true
+# max_file_bytes = 104857600
+# [chats."-1001234567890".media]
+# videos = false

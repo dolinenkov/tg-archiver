@@ -1,8 +1,11 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import re
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock, patch
 
 try:
     from sqlalchemy import func, select, text
@@ -169,6 +172,51 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ranges[0], list(range(205, 105, -1)))
         self.assertEqual(ranges[-1], [5, 4, 3, 2, 1])
 
+    async def test_private_chats_lead_each_history_pass(self):
+        async with self.db.write() as session:
+            for chat_id, kind in [(-1000000000077, "Channel"), (-7, "Chat"), (42, "User"), (99, "User")]:
+                session.add(Chat(id=chat_id, kind=kind, title=str(chat_id), catchup_pending=True))
+            session.add(Chat(id=1, kind="User", title="Excluded", enabled=False))
+        collector = Collector.__new__(Collector)
+        collector.db, collector.config = self.db, self.config
+        collector.wait_api = AsyncMock()
+        collector.discover = AsyncMock()
+        collector.catchup_page = AsyncMock()
+        collector.page = AsyncMock()
+        collector.reconcile = AsyncMock()
+        with patch("tg_archiver.collector.asyncio.sleep", side_effect=asyncio.CancelledError):
+            with self.assertRaises(asyncio.CancelledError):
+                await collector.history()
+        for operation in (collector.catchup_page, collector.page, collector.reconcile):
+            self.assertEqual([call.args[0].id for call in operation.await_args_list],
+                             [42, 99, -1000000000077, -7])
+
+    async def test_private_attachments_outrank_group_live_and_old_downloads(self):
+        for photo_id, peer, live in [(123, types.PeerChat(7), False),
+                                     (456, types.PeerUser(42), False),
+                                     (789, types.PeerChannel(77), True)]:
+            media = self.photo()
+            media.photo.id = photo_id
+            await save_message(self.db, self.config, self.message("photo", peer=peer, media=media), live=live)
+        collector = Collector.__new__(Collector)
+        collector.db, collector.config = self.db, self.config
+        collector.wait_api = AsyncMock()
+        collector.download = AsyncMock(side_effect=asyncio.CancelledError)
+        for count in (0, 1):
+            collector.download_count = count
+            with self.assertRaises(asyncio.CancelledError):
+                await collector.downloads()
+            item = collector.download.await_args.args[0]
+            sources = await collector.attachment_sources(item.id)
+            self.assertEqual([source.chat_id for source in sources], [42])
+        await collector.finish(item.id, "complete")
+        for count, expected_chat in [(0, -7), (1, -1000000000077)]:
+            collector.download_count = count
+            with self.assertRaises(asyncio.CancelledError):
+                await collector.downloads()
+            sources = await collector.attachment_sources(collector.download.await_args.args[0].id)
+            self.assertEqual([source.chat_id for source in sources], [expected_chat])
+
     async def test_attachment_atomic_completion_and_flood_retry(self):
         await save_message(self.db, self.config, self.message("photo", media=self.photo()))
         collector = Collector.__new__(Collector)
@@ -191,9 +239,10 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
         async with self.db.session() as session:
             item = await session.get(Attachment, item.id)
             self.assertEqual(item.state, "complete")
+            self.assertEqual(item.path, f"42/{item.id}.jpg")
             target = self.config.data_dir / "media" / item.path
             self.assertEqual(target.read_bytes(), b"123")
-            self.assertFalse(target.with_suffix(".part").exists())
+            self.assertFalse(target.with_name(target.name + ".part").exists())
         async def flood_download(message, file):
             raise errors.FloodWaitError(request=None, capture=20)
         collector.client.download_media = flood_download
@@ -203,6 +252,125 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(item.state, "error")
             self.assertGreater(item.retry_at, datetime.now(timezone.utc).timestamp())
             self.assertEqual(target.read_bytes(), b"123")
+
+    async def test_download_preserves_extensions_in_source_chat_folder(self):
+        collector = Collector.__new__(Collector)
+        collector.db, collector.config = self.db, self.config
+        collector.wait_api = AsyncMock()
+        for index, (name, mime, extension) in enumerate([
+            ("report.PDF", "application/pdf", ".PDF"),
+            (r"C:\private\archive.tar.gz", "application/gzip", ".gz"),
+            ("no-extension", "image/png", ".png"),
+            ("bad.unsafe:extension", "application/octet-stream", ".bin"),
+            ("original.part", "application/octet-stream", ".part"),
+        ], start=1):
+            with self.subTest(name=name):
+                message = self.message("document", message_id=index, peer=types.PeerChat(7),
+                                       media=types.MessageMediaDocument(document=types.Document(
+                                           id=index, access_hash=456, file_reference=b"ref", date=self.date,
+                                           mime_type=mime, size=3, dc_id=2,
+                                           attributes=[types.DocumentAttributeFilename(file_name=name)])))
+                await save_message(self.db, self.config, message)
+                collector.client = SimpleNamespace(
+                    get_entity=AsyncMock(return_value=types.PeerChat(7)),
+                    get_messages=AsyncMock(return_value=message))
+                async def download_media(message, file):
+                    Path(file).write_bytes(b"123")
+                    return file
+                collector.client.download_media = download_media
+                async with self.db.session() as session:
+                    item = await session.scalar(select(Attachment).where(Attachment.name == name))
+                await collector.download(item)
+                async with self.db.session() as session:
+                    saved = await session.get(Attachment, item.id)
+                    self.assertEqual(saved.state, "complete")
+                    self.assertEqual(saved.path, f"-7/{item.id}{extension}")
+                    target = self.config.data_dir / "media" / saved.path
+                    self.assertEqual(target.read_bytes(), b"123")
+                    self.assertFalse(target.with_name(target.name + ".part").exists())
+
+    async def test_large_downloads_wait_for_text_and_smaller_files(self):
+        await save_message(self.db, self.config, self.message("large private", media=self.photo()), live=True)
+        media = self.photo()
+        media.photo.id = 456
+        await save_message(self.db, self.config, self.message("small group", peer=types.PeerChat(7), media=media))
+        async with self.db.write() as session:
+            large = await session.scalar(select(Attachment).where(Attachment.media_key == "Photo:123"))
+            small = await session.scalar(select(Attachment).where(Attachment.media_key == "Photo:456"))
+            large.size, small.size = 10 * 1024 * 1024 + 1, 10 * 1024 * 1024
+            large_id, small_id = large.id, small.id
+            for chat in (await session.scalars(select(Chat))).all():
+                chat.done = True
+        collector = Collector.__new__(Collector)
+        collector.db, collector.config = self.db, self.config
+        collector.wait_api = AsyncMock()
+        collector.download = AsyncMock(side_effect=asyncio.CancelledError)
+        collector.text_idle = True
+        for count in (0, 1):
+            collector.download_count = count
+            with self.assertRaises(asyncio.CancelledError):
+                await collector.downloads()
+            self.assertEqual(collector.download.await_args.args[0].id, small_id)
+        await collector.finish(small_id, "complete")
+        for idle, done, catchup, error, enabled, expected in [
+            (False, True, False, "", True, None),
+            (True, False, False, "", True, None),
+            (True, True, True, "", True, None),
+            (True, True, False, "", True, large_id),
+            (True, False, True, "Unavailable history", True, large_id),
+            (True, False, True, "", False, large_id),
+        ]:
+            with self.subTest(idle=idle, done=done, catchup=catchup, error=error, enabled=enabled):
+                collector.text_idle = idle
+                collector.download.reset_mock()
+                async with self.db.write() as session:
+                    chat = await session.get(Chat, 42)
+                    chat.done, chat.catchup_pending, chat.error, chat.enabled = done, catchup, error, enabled
+                with patch("tg_archiver.collector.asyncio.sleep", side_effect=asyncio.CancelledError):
+                    with self.assertRaises(asyncio.CancelledError):
+                        await collector.downloads()
+                if expected is None:
+                    collector.download.assert_not_awaited()
+                else:
+                    self.assertEqual(collector.download.await_args.args[0].id, expected)
+
+    async def test_web_chats_recent_first_and_messages_chronological_across_batches(self):
+        for index in range(1, 54):
+            message = self.message(f"message {index}", message_id=index)
+            message.date = self.date + timedelta(seconds=min(index, 52))
+            await save_message(self.db, self.config, message)
+        message = self.message("newer chat", peer=types.PeerUser(99))
+        message.date = self.date + timedelta(days=1)
+        await save_message(self.db, self.config, message)
+        async with self.db.write() as session:
+            (await session.get(Chat, 42)).title = "Alphabetically first"
+            (await session.get(Chat, 99)).title = "Z newest"
+            session.add(Chat(id=100, kind="User", title="Empty chat"))
+        collector = SimpleNamespace(fatal=None)
+        async with TestClient(TestServer(make_app(self.db, self.config, collector))) as client:
+            body = await (await client.get('/')).text()
+            self.assertLess(body.index('href="/chat/99"'), body.index('href="/chat/42"'))
+            self.assertLess(body.index('href="/chat/42"'), body.index('href="/chat/100"'))
+            for path, expected in [('/chat/42', list(range(4, 54))),
+                                   ('/chat/42?offset=50', [1, 2, 3]),
+                                   ('/message/42/51', list(range(48, 54)))]:
+                body = await (await client.get(path)).text()
+                self.assertEqual([int(value) for value in re.findall(r'<article id="m(\d+)"', body)], expected)
+                if path.startswith('/chat'):
+                    self.assertIn('data-scroll-start="latest"', body)
+                    self.assertLess(body.index('<div class="scroll-footer">', body.index('data-scroll-region="messages"')),
+                                    body.index('class="message-list"'))
+                else:
+                    self.assertIn('data-scroll-target="m51"', body)
+
+    async def test_conversation_order_uses_timestamp_before_message_id(self):
+        for message_id, seconds in [(700, 1), (10, 3), (400, 2)]:
+            message = self.message(str(message_id), message_id=message_id)
+            message.date = self.date + timedelta(seconds=seconds)
+            await save_message(self.db, self.config, message)
+        async with TestClient(TestServer(make_app(self.db, self.config, SimpleNamespace(fatal=None)))) as client:
+            body = await (await client.get('/chat/42')).text()
+            self.assertEqual([int(value) for value in re.findall(r'<article id="m(\d+)"', body)], [700, 400, 10])
 
     async def test_web_escaping_search_and_download_path(self):
         await save_message(self.db, self.config, self.message('<script>alert(1)</script> Привет hello'))
@@ -220,6 +388,18 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 400)
             response = await client.get('/search', params={"q": "hello", "from": "invalid"})
             self.assertEqual(response.status, 400)
+            legacy = self.config.data_dir / "media" / "0" / "legacy.bin"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_bytes(b"legacy")
+            async with self.db.write() as session:
+                item = Attachment(media_key="legacy", category="files", name="legacy.txt", mime="text/plain",
+                                  size=6, state="complete", path="0/legacy.bin")
+                session.add(item)
+                await session.flush()
+                item_id = item.id
+            response = await client.get(f'/attachment/{item_id}')
+            self.assertEqual(response.status, 200)
+            self.assertEqual(await response.read(), b"legacy")
             async with self.db.write() as session:
                 item = Attachment(media_key="test", category="files", name="bad.html", mime="text/html",
                                   size=1, state="complete", path="../../archive.sqlite3")
@@ -228,6 +408,64 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
                 item_id = item.id
             response = await client.get(f'/attachment/{item_id}?inline=1')
             self.assertEqual(response.status, 404)
+
+
+    async def test_scroll_continuations_keep_search_filters_and_stop_at_end(self):
+        for index in range(1, 54):
+            await save_message(self.db, self.config, self.message("needle", message_id=index))
+        async with self.db.write() as session:
+            for index in range(100, 152):
+                session.add(Chat(id=index, kind="User", title=f"Chat {index}"))
+        collector = SimpleNamespace(fatal=None)
+        from html import unescape
+        async with TestClient(TestServer(make_app(self.db, self.config, collector))) as client:
+            script = await client.get('/static/app.js')
+            self.assertEqual(script.status, 200)
+            self.assertIn(script.content_type, {"application/javascript", "text/javascript"})
+            for path in ['/', '/chat/42', '/search?q=needle&chat=42&from=2026-01-01&to=2026-01-01']:
+                response = await client.get(path)
+                body = await response.text()
+                region = 'search' if path.startswith('/search') else ('messages' if path.startswith('/chat') else 'chats')
+                body = re.search(rf'data-scroll-region="{region}"(.*?)(?:</aside>|</main>)', body, re.S).group(1)
+                self.assertIn("script-src 'self'", response.headers['Content-Security-Policy'])
+                self.assertIn("connect-src 'self'", response.headers['Content-Security-Policy'])
+                self.assertIn('data-scroll-list', body)
+                self.assertNotIn('aria-label="Pagination"', body)
+                self.assertEqual(len(re.findall('data-scroll-key=', body)), 50)
+                continuation = unescape(re.search(r'data-scroll-next href="([^"]+)"', body).group(1))
+                if path.startswith('/search'):
+                    for parameter in ('q=needle', 'chat=42', 'from=2026-01-01', 'to=2026-01-01'):
+                        self.assertIn(parameter, continuation)
+                body = await (await client.get(continuation)).text()
+                body = re.search(rf'data-scroll-region="{region}"(.*?)(?:</aside>|</main>)', body, re.S).group(1)
+                self.assertEqual(len(re.findall('data-scroll-key=', body)), 3)
+                self.assertNotIn('data-scroll-next', body)
+                self.assertIn('Beginning of conversation.' if region == 'messages' else 'All items loaded.', body)
+
+    async def test_jinja_layout_escapes_metadata_and_marks_own_messages(self):
+        from tg_archiver.db import Setting
+        message = self.message('hello <script>alert(1)</script> https://example.com/?a=1&b=2')
+        message.from_id = types.PeerUser(42)
+        await save_message(self.db, self.config, message)
+        async with self.db.write() as session:
+            session.add(Setting(key="account_id", value="42"))
+            (await session.get(Chat, 42)).title = '<img src=x onerror=alert(1)>'
+        async with TestClient(TestServer(make_app(self.db, self.config, SimpleNamespace(fatal=None)))) as client:
+            response = await client.get('/chat/42')
+            body = await response.text()
+            self.assertEqual(response.status, 200)
+            self.assertIn('class="message outgoing"', body)
+            self.assertIn('&lt;img src=x onerror=alert(1)&gt;', body)
+            self.assertIn('&lt;script&gt;alert(1)&lt;/script&gt;', body)
+            self.assertNotIn('<img src=x', body)
+            self.assertIn('href="https://example.com/?a=1&amp;b=2"', body)
+            self.assertIn('data-scroll-region="chats"', body)
+            self.assertIn('data-scroll-region="messages"', body)
+            self.assertIn('Read-only archive', body)
+            self.assertNotIn("unsafe-inline", response.headers['Content-Security-Policy'])
+            self.assertEqual((await client.get('/static/app.css')).status, 200)
+            self.assertEqual((await client.get('/static/icon.svg')).status, 200)
+            self.assertEqual((await client.get('/status')).status, 200)
 
 
 if __name__ == "__main__":

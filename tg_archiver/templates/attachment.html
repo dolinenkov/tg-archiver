@@ -1,0 +1,11 @@
+{% from 'macros.html' import icon %}
+<div class="attachment">
+{% if attachment.state == 'complete' %}
+  {% if attachment.mime in image_types %}<a class="image-link" href="/attachment/{{ attachment.id }}" title="Download {{ attachment.name }}"><img loading="lazy" src="/attachment/{{ attachment.id }}?inline=1" alt="{{ attachment.name }}"></a>
+  {% elif attachment.mime in video_types %}<video controls preload="none" src="/attachment/{{ attachment.id }}?inline=1"></video>
+  {% elif attachment.mime in audio_types %}<audio controls preload="none" src="/attachment/{{ attachment.id }}?inline=1"></audio>{% endif %}
+  <a class="file-link" href="/attachment/{{ attachment.id }}"><span class="file-icon">{{ icon('file', 23) }}</span><span><strong>{{ attachment.name }}</strong><small>{{ attachment.size|filesizeformat }} · Download</small></span>{{ icon('arrow', 17) }}</a>
+{% else %}
+  <div class="file-link pending-file"><span class="file-icon">{{ icon('file', 23) }}</span><span><strong>{{ attachment.name }}</strong><small>{{ attachment.state }}{% if attachment.size %} · {{ attachment.size|filesizeformat }}{% endif %}</small></span></div>
+{% endif %}
+</div>

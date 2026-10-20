@@ -1,0 +1,43 @@
+{% from 'macros.html' import icon, avatar with context %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{{ title }} · Telegram archive</title>
+  <link rel="icon" href="/static/icon.svg">
+  <link rel="stylesheet" href="/static/app.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body data-view="{{ view }}" data-chat="{{ current_chat_id or '' }}">
+  <a class="skip-link" href="#workspace">Skip to conversation</a>
+  <div class="app-shell">
+    <nav class="rail" aria-label="Main navigation">
+      <a class="brand-mark" href="/" data-nav aria-label="Archive home">{{ icon('plane', 26) }}</a>
+      <div class="rail-links">
+        <a href="/" data-nav data-section="chats" class="rail-link {{ 'active' if view in ('home', 'chat', 'message') else '' }}" aria-label="Chats" title="Chats">{{ icon('chats', 23) }}<span>Chats</span></a>
+        <a href="/search" data-nav data-section="search" class="rail-link {{ 'active' if view == 'search' else '' }}" aria-label="Search archive" title="Search archive">{{ icon('search', 23) }}<span>Search</span></a>
+        <a href="/status" data-nav data-section="status" class="rail-link {{ 'active' if view == 'status' else '' }}" aria-label="Collection status" title="Collection status">{{ icon('activity', 23) }}<span>Status</span></a>
+      </div>
+      <button class="rail-link theme-toggle" type="button" data-theme-toggle aria-label="Toggle dark theme" title="Toggle theme">{{ icon('moon', 23) }}<span>Theme</span></button>
+      <span class="rail-avatar" title="Personal archive">A</span>
+    </nav>
+    <aside class="sidebar" aria-label="Archived chats">
+      <header class="sidebar-header"><div class="wordmark">Archive<span class="wordmark-dot"></span></div><span class="personal-label">PERSONAL</span></header>
+      <form class="sidebar-search" action="/search" data-nav-form role="search"><label>{{ icon('search', 18) }}<input name="q" aria-label="Search archived messages" placeholder="Search messages" autocomplete="off"></label><button class="sr-only">Search</button></form>
+      <div class="list-heading"><span>ALL CHATS</span><span class="count-badge">{{ chat_count }}</span><span class="list-order">Recent first</span></div>
+      <div class="chat-scroll" data-scroll-region="chats" data-scroll-viewport>
+        <div class="chat-list" data-scroll-list>
+          {% include 'chat_rows.html' %}
+        </div>
+        {{ sidebar_footer }}
+      </div>
+      <footer class="sidebar-footer"><span class="connection-dot {{ 'connected' if connected else '' }}"></span><span>{{ 'Connected to Telegram' if connected else 'Telegram disconnected' }}</span>{{ icon('lock', 13) }}</footer>
+    </aside>
+    <main class="workspace" id="workspace" tabindex="-1" data-view="{{ view }}" data-chat="{{ current_chat_id or '' }}">
+      {% include content_template %}
+    </main>
+  </div>
+  <div class="navigation-error" role="alert" hidden></div>
+</body>
+</html>
