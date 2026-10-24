@@ -35,7 +35,8 @@ videos = true
     def test_rejects_typos_and_invalid_types(self):
         for source in ['[media]\nvideo=true', '[media]\nvideos="false"',
                        '[archive]\nport=true', '[archive]\nmax_file_bytes=-1',
-                       '[chats."42"]\nenabled="false"', '[archive]\nexcluded_chats=["42"]']:
+                       '[chats."42"]\nenabled="false"', '[archive]\nexcluded_chats=["42"]',
+                       '[archive]\ntranscribe_audio="true"', '[archive]\ntranscribe_audio=1']:
             with self.subTest(source=source), self.assertRaises(ValueError):
                 self.read_config(source)
 

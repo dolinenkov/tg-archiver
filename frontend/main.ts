@@ -7,6 +7,106 @@ let navigation: AbortController | null = null;
 let currentUrl = location.href;
 let avatarRefresh: number | undefined;
 let fetchingAvatars = false;
+let fetchingTranscripts = false;
+
+async function refreshTranscripts(): Promise<void> {
+  if (fetchingTranscripts || document.hidden) return;
+  const nodes = Array.from(document.querySelectorAll<HTMLElement>('[data-transcription-id]:not([data-transcribe-off])'));
+  const ids = [...new Set(nodes.filter(node => {
+    const bounds = node.getBoundingClientRect();
+    return !['complete', 'unavailable'].includes(node.dataset.transcriptionState ?? '') && bounds.height > 0 && bounds.bottom > 0 && bounds.top < innerHeight;
+  }).map(node => node.dataset.transcriptionId!))].slice(0, 100);
+  if (!ids.length) return;
+  fetchingTranscripts = true;
+  try {
+    const response = await fetch(`/transcriptions?ids=${ids.join(',')}`, { credentials: 'same-origin' });
+    if (!response.ok) return;
+    const results: Record<string, { body: string; state: string; error: string }> = await response.json();
+    nodes.forEach(node => {
+      const result = results[node.dataset.transcriptionId!];
+      if (!result || typeof result.body !== 'string' || typeof result.state !== 'string' || typeof result.error !== 'string') return;
+      node.dataset.transcriptionState = result.state;
+      node.querySelector('[data-transcript-status]')!.textContent = result.state;
+      const body = node.querySelector<HTMLElement>('[data-transcript-body]')!;
+      body.textContent = result.body;
+      body.hidden = !result.body;
+      node.querySelector('[data-transcript-error]')!.textContent = result.error;
+    });
+  } catch { /* Cached transcripts remain readable while offline. */ }
+  finally { fetchingTranscripts = false; }
+}
+const photoViewer = document.querySelector<HTMLDialogElement>('.photo-viewer');
+let photoLinks: HTMLAnchorElement[] = [];
+let photoIndex = 0;
+
+function showPhoto(index: number): void {
+  if (!photoViewer || !photoLinks[index]) return;
+  photoIndex = index;
+  const link = photoLinks[index];
+  const image = photoViewer.querySelector('img')!;
+  image.src = link.href;
+  image.alt = link.querySelector('img')?.alt ?? 'Profile photo';
+  photoViewer.querySelector('figcaption')!.textContent = link.textContent?.trim() ?? '';
+  photoViewer.querySelector<HTMLButtonElement>('[data-photo-prev]')!.disabled = index === 0;
+  photoViewer.querySelector<HTMLButtonElement>('[data-photo-next]')!.disabled = index === photoLinks.length - 1;
+  if (!photoViewer.open) photoViewer.showModal();
+}
+
+document.addEventListener('click', event => {
+  const target = event.target as Element;
+  const link = target.closest<HTMLAnchorElement>('a[data-profile-photo], a[data-profile-photo-trigger]');
+  if (link && photoViewer && event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+    event.preventDefault();
+    photoLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[data-profile-photo]'));
+    showPhoto(photoLinks.findIndex(photo => photo.href === link.href));
+  } else if (target.closest('[data-photo-close]') || target === photoViewer) photoViewer?.close();
+  else if (target.closest('[data-photo-prev]')) showPhoto(photoIndex - 1);
+  else if (target.closest('[data-photo-next]')) showPhoto(photoIndex + 1);
+});
+photoViewer?.addEventListener('keydown', event => {
+  if (event.key === 'ArrowLeft') { event.preventDefault(); showPhoto(photoIndex - 1); }
+  if (event.key === 'ArrowRight') { event.preventDefault(); showPhoto(photoIndex + 1); }
+});
+
+function localizeTimes(scope: ParentNode = document): void {
+  const full = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const day = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+  const today = new Date().toDateString();
+  scope.querySelectorAll<HTMLTimeElement>('time[data-local-time]').forEach(node => {
+    const date = new Date(node.dateTime);
+    if (!Number.isFinite(date.getTime())) return;
+    node.textContent = node.dataset.localTime === 'short'
+      ? new Intl.DateTimeFormat(undefined, date.toDateString() === today
+        ? { hour: '2-digit', minute: '2-digit' } : { day: '2-digit', month: 'short' }).format(date)
+      : full.format(date);
+    node.title = full.format(date);
+    if (node.dataset.capturedAt && node.dataset.sourceAt) {
+      node.title = `Sent: ${full.format(date)} · Captured: ${full.format(new Date(node.dataset.capturedAt))} · Source: ${full.format(new Date(node.dataset.sourceAt))}`;
+    }
+  });
+  scope.querySelectorAll<HTMLElement>('[data-browser-zone]').forEach(node => {
+    node.textContent = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  });
+  scope.querySelectorAll<HTMLElement>('.message-list').forEach(list => {
+    list.querySelectorAll('[data-message-date]').forEach(node => node.remove());
+    let previous = '';
+    list.querySelectorAll<HTMLElement>('.message[data-sent-at]').forEach(message => {
+      const date = new Date(message.dataset.sentAt!);
+      if (!Number.isFinite(date.getTime())) return;
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      if (key !== previous) {
+        const divider = document.createElement('div');
+        divider.className = 'date-divider';
+        divider.dataset.messageDate = key;
+        const label = document.createElement('span');
+        label.textContent = day.format(date);
+        divider.append(label);
+        message.before(divider);
+        previous = key;
+      }
+    });
+  });
+}
 
 function failedAvatar(image: HTMLImageElement): void {
   const parent = image.closest<HTMLElement>('[data-avatar-chat]');
@@ -63,7 +163,9 @@ function messageTarget(): HTMLElement | null {
   if (location.hash) {
     try { id = decodeURIComponent(location.hash.slice(1)); } catch { return null; }
   }
-  return id ? document.getElementById(id) : null;
+  const target = id ? document.getElementById(id) : null;
+  const selected = target?.querySelector<HTMLElement>('.selected-version');
+  return selected?.closest<HTMLDetailsElement>('.message-history')?.open ? selected : target;
 }
 
 function revealTarget(): void {
@@ -71,6 +173,7 @@ function revealTarget(): void {
   // pushState does not consistently update the CSS :target pseudo-class.
   target?.classList.add('context-target');
   target?.scrollIntoView({ block: 'center' });
+  target?.closest('[data-scroll-region]')?.dispatchEvent(new Event('scroll'));
 }
 
 function initializeScroll(scope: ParentNode = document): void {
@@ -93,7 +196,10 @@ function initializeScroll(scope: ParentNode = document): void {
       if (!older) return;
       pinned = region.scrollHeight - region.clientHeight - region.scrollTop < 4;
       const bounds = region.getBoundingClientRect();
-      const node = Array.from(list!.querySelectorAll<HTMLElement>('[data-scroll-key]')).find(node => {
+      const selected = list!.querySelector<HTMLElement>('.selected-version');
+      const selectedBounds = selected?.getBoundingClientRect();
+      const node = selected && selectedBounds && selectedBounds.bottom > bounds.top && selectedBounds.top < bounds.bottom
+        ? selected : Array.from(list!.querySelectorAll<HTMLElement>('[data-scroll-key]')).find(node => {
         const item = node.getBoundingClientRect();
         return item.bottom > bounds.top && item.top < bounds.bottom;
       });
@@ -116,6 +222,14 @@ function initializeScroll(scope: ParentNode = document): void {
       else if (region.dataset.scrollStart === 'latest') region.scrollTop = region.scrollHeight;
       remember();
       region.addEventListener('scroll', remember, { signal: controller.signal, passive: true });
+      region.addEventListener('click', event => {
+        const summary = (event.target as Element).closest<HTMLElement>('summary');
+        if (!summary || !region.contains(summary)) return;
+        // Opening history is an explicit reading action. Preserve its control
+        // instead of following the growing message to the bottom of the list.
+        pinned = false;
+        anchor = { node: summary, top: summary.getBoundingClientRect().top };
+      }, { signal: controller.signal, capture: true });
       // Keep the latest message in view as media loads, or preserve the reader's
       // visible message when older images and responsive layout change heights.
       if (window.ResizeObserver) {
@@ -155,11 +269,9 @@ function initializeScroll(scope: ParentNode = document): void {
         });
         change(() => {
           if (older) {
-            const lastDate = Array.from(incoming.querySelectorAll<HTMLElement>('[data-message-date]')).at(-1);
-            const firstDate = list!.querySelector<HTMLElement>('[data-message-date]');
-            if (lastDate && firstDate && firstDate.dataset.messageDate === lastDate.dataset.messageDate) firstDate.remove();
             list!.prepend(...incoming.childNodes);
           } else list!.append(...incoming.childNodes);
+          localizeTimes(region);
           const following = incomingRegion!.querySelector<HTMLAnchorElement>('[data-scroll-next]');
           if (following) {
             next!.href = following.getAttribute('href')!;
@@ -207,7 +319,7 @@ function updateSelection(): void {
   const view = workspace.dataset.view;
   document.querySelectorAll<HTMLElement>('[data-section]').forEach(link => {
     const section = link.dataset.section;
-    link.classList.toggle('active', section === view || (section === 'chats' && ['home', 'chat', 'message'].includes(view ?? '')));
+    link.classList.toggle('active', section === view || (section === 'chats' && ['home', 'chat', 'message', 'profile'].includes(view ?? '')));
   });
 }
 
@@ -221,6 +333,9 @@ async function navigate(url: string, push = true): Promise<void> {
   const error = document.querySelector<HTMLElement>('.navigation-error')!;
   const scroll = workspace.querySelector<HTMLElement>('[data-scroll-viewport]');
   positions.set(currentUrl, scroll?.scrollTop ?? 0);
+  if (workspace.dataset.view === 'profile' && destination.pathname === new URL(currentUrl).pathname) {
+    positions.set(destination.href, scroll?.scrollTop ?? 0);
+  }
   workspace.setAttribute('aria-busy', 'true');
   error.hidden = true;
   try {
@@ -239,6 +354,7 @@ async function navigate(url: string, push = true): Promise<void> {
     document.title = page.title;
     if (push) history.pushState(null, '', destination.href);
     currentUrl = destination.href;
+    localizeTimes(workspace);
     updateSelection();
     initializeScroll(workspace);
     scheduleAvatarRefresh();
@@ -254,7 +370,10 @@ async function navigate(url: string, push = true): Promise<void> {
       if (!push) history.replaceState(null, '', currentUrl);
     }
   } finally {
-    if (navigation === controller) workspace.removeAttribute('aria-busy');
+    if (navigation === controller) {
+      workspace.removeAttribute('aria-busy');
+      navigation = null;
+    }
   }
 }
 
@@ -275,6 +394,9 @@ document.addEventListener('submit', event => {
   void navigate(url.href);
 });
 window.addEventListener('popstate', () => void navigate(location.href, false));
+// Native fragment scrolling happens after deferred scripts and would otherwise
+// replace our selected-version position with the top of the whole message.
+window.addEventListener('pageshow', () => requestAnimationFrame(() => requestAnimationFrame(revealTarget)));
 history.scrollRestoration = 'manual';
 
 const themeButton = document.querySelector<HTMLButtonElement>('[data-theme-toggle]')!;
@@ -290,6 +412,7 @@ themeButton.addEventListener('click', () => {
   setTheme(theme);
   try { localStorage.setItem('archive-theme', theme); } catch { /* Theme still works without storage. */ }
 });
+localizeTimes();
 initializeScroll();
 revealTarget();
 document.querySelectorAll<HTMLImageElement>('[data-avatar-image]').forEach(image => {
@@ -298,4 +421,9 @@ document.querySelectorAll<HTMLImageElement>('[data-avatar-image]').forEach(image
 document.addEventListener('scroll', scheduleAvatarRefresh, true);
 document.addEventListener('visibilitychange', scheduleAvatarRefresh);
 window.setInterval(() => void refreshAvatarPhotos(), 30_000);
+window.setInterval(() => void refreshTranscripts(), 10_000);
+window.setInterval(() => {
+  if (!document.hidden && !navigation && document.querySelector('[data-setup-busy]')) void navigate('/settings', false);
+}, 1500);
 void refreshAvatarPhotos();
+void refreshTranscripts();

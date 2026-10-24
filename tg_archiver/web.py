@@ -13,7 +13,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import OperationalError
 
 from .avatars import cached_file
-from .db import Attachment, Avatar, Chat, Message, Sender, Setting, Version, VersionAttachment
+from .db import Attachment, Avatar, Chat, Message, Profile, ProfilePhoto, Sender, Setting, Transcription, Version, VersionAttachment
 
 
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
@@ -39,6 +39,8 @@ def message_text(value):
 
 def fallback(raw, body):
     data = json.loads(raw)
+    if data.get("_") == "TelegramDesktopExport":
+        return Markup(f'<details class="message-version"><summary>Export metadata</summary><pre class="body">{e(json.dumps(data["export"], ensure_ascii=False, indent=2))}</pre></details>')
     media = data.get("media") or data.get("action")
     if not media:
         return Markup("")
@@ -75,7 +77,7 @@ TEMPLATES.globals.update(initials=initials, message_text=message_text, fallback=
 async def headers(request, handler):
     response = await handler(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Referrer-Policy"] = "same-origin"
     response.headers["Cache-Control"] = "no-store"
     response.headers["Content-Security-Policy"] = "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
     return response
@@ -104,9 +106,9 @@ def date_filter(value, end=False):
     return date.isoformat()
 
 
-def scroll_footer(path, params, offset, has_more, older=False):
+def scroll_footer(path, params, offset, has_more, older=False, offset_key="offset"):
     if has_more:
-        url = path + "?" + urlencode(dict(params, offset=offset + 50))
+        url = path + "?" + urlencode(dict(params, **{offset_key: offset + 50}))
         label = "Load older messages" if older else "Load more"
         return Markup(f'<div class="scroll-footer"><a data-scroll-next href="{e(url)}">{label}</a><p data-scroll-status role="status" aria-live="polite"></p></div>')
     label = "Beginning of conversation." if older else "All items loaded."
@@ -148,23 +150,31 @@ async def chats(request):
     return await render_page(request, "Chats", "home.html", "home")
 
 
-async def render_message(session, message, expanded=None, account_id=None):
+async def render_message(session, message, expanded=None, account_id=None, photos=None, transcription_enabled=True):
     versions = (await session.scalars(select(Version).where(Version.message_id == message.id)
                 .order_by(Version.source_at.desc(), Version.id.desc()))).all()
-    versions.sort(key=lambda v: (v.id != message.latest_id, -v.id))
+    versions.sort(key=lambda v: v.id != message.latest_id)
     sender = await session.get(Sender, message.sender_id) if message.sender_id else None
+    profile = await session.get(Profile, message.sender_id) if message.sender_id and not sender else None
     attachments = {}
     for version in versions:
         attachments[version.id] = (await session.scalars(select(Attachment).join(VersionAttachment)
                                    .where(VersionAttachment.version_id == version.id))).all()
+    attachment_ids = {item.id for items in attachments.values() for item in items}
+    transcripts = {item.attachment_id: item for item in (await session.scalars(select(Transcription)
+        .where(Transcription.attachment_id.in_(attachment_ids)))).all()}
     return TEMPLATES.get_template("message.html").render(
         message=message, versions=versions, version_attachments=attachments, expanded=expanded,
         outgoing=account_id is not None and str(message.sender_id) == account_id,
-        sender=sender.name if sender else str(message.sender_id or "Service"))
+        sender=sender.name if sender else (profile.name if profile and profile.name else str(message.sender_id or "Service")),
+        avatar_versions=photos or {}, transcripts=transcripts, transcription_enabled=transcription_enabled)
 
 
-async def render_messages(session, records, expanded=None):
+async def render_messages(session, records, expanded=None, data_dir=None, transcription_enabled=True):
+    records = list(records)
     owner = await session.get(Setting, "account_id")
+    # Cached paths only; no Telegram requests while rendering a conversation.
+    photos = await avatar_versions(session, data_dir, [m.sender_id for m in records if m.sender_id is not None]) if data_dir else {}
     output = []
     previous_date = None
     for album, group in groupby(records, key=lambda m: m.album):
@@ -175,7 +185,7 @@ async def render_messages(session, records, expanded=None):
             if date != previous_date:
                 output.append(f'<div class="date-divider" data-message-date="{e(date)}"><span>{e(datetime.fromisoformat(record.sent_at).strftime("%d %B %Y"))}</span></div>')
                 previous_date = date
-            output.append(await render_message(session, record, expanded, owner.value if owner else None))
+            output.append(await render_message(session, record, expanded, owner.value if owner else None, photos, transcription_enabled))
         if album:
             output.append('</section>')
     return Markup("".join(output))
@@ -190,7 +200,8 @@ async def chat(request):
             raise web.HTTPNotFound()
         records = (await session.scalars(select(Message).where(Message.chat_id == chat_id)
                    .order_by(Message.sent_at.desc(), Message.telegram_id.desc()).offset(offset).limit(51))).all()
-        messages = await render_messages(session, reversed(records[:50]))
+        messages = await render_messages(session, reversed(records[:50]), data_dir=request.app["config"].data_dir,
+                                         transcription_enabled=request.app["config"].transcribe_audio)
     return await render_page(request, current.title, "conversation.html", "chat", current=current,
                              messages=messages, footer=scroll_footer(f"/chat/{chat_id}", {}, offset, len(records) > 50, older=True))
 
@@ -206,7 +217,7 @@ async def message(request):
         records = (await session.scalars(select(Message).where(Message.chat_id == chat_id,
                    Message.telegram_id.between(max(0, telegram_id - 3), telegram_id + 3))
                    .order_by(Message.sent_at, Message.telegram_id))).all()
-        messages = await render_messages(session, records, version)
+        messages = await render_messages(session, records, version, request.app["config"].data_dir, request.app["config"].transcribe_audio)
     return await render_page(request, f"Message #{telegram_id}", "conversation.html", "message",
                              current=current, messages=messages, footer=Markup(""), target_id=telegram_id)
 
@@ -224,7 +235,11 @@ async def search(request):
     async with request.app["db"].session() as session:
         chat_options = (await session.scalars(select(Chat).order_by(Chat.title))).all()
         if query:
-            sql = "SELECT v.id, v.body, m.chat_id, m.telegram_id, m.sent_at, c.title FROM search JOIN versions v ON v.id=search.rowid JOIN messages m ON m.id=v.message_id JOIN chats c ON c.id=m.chat_id WHERE search MATCH :query"
+            sql = """SELECT v.id, v.body, m.chat_id, m.telegram_id, m.sent_at, c.title,
+                (SELECT group_concat(t.body,char(10)) FROM transcriptions t JOIN version_attachments va
+                 ON va.attachment_id=t.attachment_id WHERE va.version_id=v.id AND t.body!='') AS transcript
+                FROM search JOIN versions v ON v.id=search.rowid JOIN messages m ON m.id=v.message_id
+                JOIN chats c ON c.id=m.chat_id WHERE search MATCH :query"""
             values = {"query": query, "offset": offset}
             if selected:
                 try:
@@ -280,7 +295,12 @@ async def status(request):
         failures = (await session.scalars(select(Attachment).where(Attachment.error != "").limit(50))).all()
         chats_with_errors = (await session.scalars(select(Chat).where(Chat.error != ""))).all()
         chat_progress = (await session.scalars(select(Chat).order_by(Chat.title))).all()
+        transcription_counts = (await session.execute(select(Transcription.state, func.count()).group_by(Transcription.state))).all()
+        retry_setting = next((s for s in settings if s.key == 'transcription_retry_at'), None)
+        transcription_retry_at = datetime.fromtimestamp(float(retry_setting.value), timezone.utc).isoformat() if retry_setting else None
     return await render_page(request, "Status", "status.html", "status", fatal=request.app["collector"].fatal,
+                             transcription_counts=transcription_counts, transcription_enabled=request.app["config"].transcribe_audio,
+                             transcription_retry_at=transcription_retry_at,
                              settings=settings, counts=counts, failures=failures,
                              chats_with_errors=chats_with_errors, chat_progress=chat_progress)
 
@@ -295,7 +315,13 @@ async def health(request):
 async def avatar_versions(session, data_dir, ids):
     records = (await session.scalars(select(Avatar).where(
         Avatar.chat_id.in_(ids), Avatar.path.is_not(None), Avatar.downloaded_photo_id != ""))).all()
-    return {item.chat_id: item.downloaded_photo_id for item in records if cached_file(data_dir, item.path)}
+    versions = {item.chat_id: item.downloaded_photo_id for item in records if cached_file(data_dir, item.path)}
+    photos = (await session.execute(select(Profile.id, ProfilePhoto).join(ProfilePhoto,
+        (ProfilePhoto.profile_id == Profile.id) & (ProfilePhoto.telegram_id == Profile.photo_id)).where(Profile.id.in_(ids)))).all()
+    for peer_id, photo in photos:
+        if cached_file(data_dir, photo.path):
+            versions[peer_id] = photo.telegram_id
+    return versions
 
 
 async def avatars(request):
@@ -313,13 +339,32 @@ async def avatars(request):
     return web.json_response({str(chat_id): photos.get(chat_id, "") for chat_id in ids})
 
 
+async def transcriptions(request):
+    values = request.query.get("ids", "").split(",")
+    if len(values) > 100:
+        raise web.HTTPBadRequest(text="Too many attachment IDs")
+    try:
+        ids = {int(value) for value in values if value}
+    except ValueError:
+        raise web.HTTPBadRequest(text="Invalid attachment ID") from None
+    if any(value <= 0 or value >= 2**63 for value in ids):
+        raise web.HTTPBadRequest(text="Invalid attachment ID")
+    async with request.app["db"].session() as session:
+        items = (await session.scalars(select(Transcription).where(Transcription.attachment_id.in_(ids)))).all()
+    return web.json_response({str(item.attachment_id): dict(body=item.body, state=item.state, error=item.error) for item in items})
+
+
 async def avatar(request):
     chat_id = int(request.match_info["chat_id"])
     if chat_id < -(2 ** 63) or chat_id >= 2 ** 63:
         raise web.HTTPNotFound()
     async with request.app["db"].session() as session:
         item = await session.get(Avatar, chat_id)
-    target = cached_file(request.app["config"].data_dir, item.path) if item else None
+        photo = await session.scalar(select(ProfilePhoto).join(Profile,
+            (Profile.id == ProfilePhoto.profile_id) & (Profile.photo_id == ProfilePhoto.telegram_id)).where(Profile.id == chat_id))
+    target = cached_file(request.app["config"].data_dir, photo.path) if photo else None
+    if not target:
+        target = cached_file(request.app["config"].data_dir, item.path) if item else None
     if not target:
         raise web.HTTPNotFound()
     response = web.FileResponse(target)
@@ -329,12 +374,21 @@ async def avatar(request):
 
 
 def make_app(db, config, collector):
+    from .setup_web import Setup
+    from .profile_web import profile_page, profile_photo
     app = web.Application(middlewares=[headers])
     app["db"], app["config"], app["collector"] = db, config, collector
+    setup = Setup(db, config, collector)
+    app["setup"] = setup
+    app.on_shutdown.append(setup.cleanup)
     app.add_routes([web.static("/static", Path(__file__).parent / "static"), web.get("/", chats),
                     web.get(r"/chat/{chat_id:-?\d+}", chat),
                     web.get(r"/message/{chat_id:-?\d+}/{message_id:\d+}", message),
                     web.get("/search", search), web.get("/status", status), web.get("/health", health),
+                    web.get("/settings", setup.page), web.post("/settings", setup.post),
+                    web.get(r"/profile/{peer_id:-?\d+}", profile_page),
+                    web.get(r"/profile-photo/{photo_id:\d+}", profile_photo),
                     web.get("/avatars", avatars), web.get(r"/avatar/{chat_id:-?\d+}", avatar),
+                    web.get("/transcriptions", transcriptions),
                     web.get(r"/attachment/{attachment_id:\d+}", attachment)])
     return app

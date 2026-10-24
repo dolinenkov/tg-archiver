@@ -88,9 +88,13 @@ async def application(config):
 
 def main():
     parser = argparse.ArgumentParser(description="Personal Telegram history archive")
-    parser.add_argument("command", choices=["login", "chats", "run", "retry"], default="run", nargs="?")
+    parser.add_argument("command", choices=["login", "chats", "run", "retry", "import"], default="run", nargs="?")
+    parser.add_argument("export", type=Path, nargs="?", help="Telegram Desktop result.json (import only)")
+    parser.add_argument("--dry-run", action="store_true", help="Validate and summarize an import without writing archive data")
     parser.add_argument("--config", type=Path, default=Path("config.toml"))
     args = parser.parse_args()
+    if (args.command == "import") != (args.export is not None) or (args.dry_run and args.command != "import"):
+        parser.error("import requires an export path; export paths and --dry-run apply only to import")
     # Newly created session/database files contain private authorization and messages.
     if os.name != "nt":
         os.umask(0o077)
@@ -99,7 +103,11 @@ def main():
     try:
         config = load(args.config)
         with data_lock(config.data_dir):
-            if args.command == "run":
+            if args.command == "import":
+                from .importer import import_export
+                counts = asyncio.run(import_export(config, args.export, args.dry_run))
+                print(("Dry run: " if args.dry_run else "Imported: ") + ", ".join(f"{key}={value}" for key, value in counts.items()))
+            elif args.command == "run":
                 web.run_app(application(config), host=config.host, port=config.port, access_log=None)
             else:
                 asyncio.run(command(config, args.command))

@@ -1,0 +1,34 @@
+{% from 'macros.html' import icon %}
+{% macro field(action) %}<input type="hidden" name="csrf" value="{{ setup.csrf }}"><input type="hidden" name="action" value="{{ action }}">{% endmacro %}
+<header class="conversation-header"><a class="icon-button mobile-back" href="/" data-nav aria-label="Back to chats">{{ icon('back') }}</a><span class="header-symbol">{{ icon('lock', 23) }}</span><div class="conversation-heading"><h1>Settings</h1><p>Your Telegram account and local exports.</p></div></header>
+<div class="utility-scroll status-content" {% if setup.busy %}data-setup-busy{% endif %}>
+  {% if setup.error %}<p class="notice error" role="alert">{{ setup.error }}</p>{% endif %}
+  {% if setup.notice %}<p class="notice" role="status">{{ setup.notice }}</p>{% endif %}
+  {% if setup.busy %}<section class="status-section"><h2>Working…</h2><p role="status">This page refreshes automatically. You can continue browsing your archive.</p><a href="/settings">Refresh status</a></section>{% endif %}
+  <section class="status-section"><h2>Telegram account</h2>
+    {% if not setup.busy %}
+      {% if connected and not setup.paused %}<p><span class="connection-dot connected"></span> Connected to Telegram.</p>
+      {% else %}
+      <p class="muted">Sign in to start collecting messages. Collection pauses during sign-in. An unfinished sign-in expires after five minutes.</p>
+      <form method="post" action="/settings" class="settings-form">
+        {% if setup.step == 'phone' %}{{ field('phone') }}<label>Phone number<input type="tel" name="phone" autocomplete="tel" placeholder="+1 555 123 4567" required></label><button class="primary-button">Send login code</button>
+        {% elif setup.step == 'code' %}{{ field('code') }}<label>Telegram login code<input name="code" inputmode="numeric" autocomplete="one-time-code" required autofocus></label><button class="primary-button">Verify code</button>
+        {% elif setup.step == 'password' %}{{ field('password') }}<label>Two-step verification password<input type="password" name="password" autocomplete="current-password" required autofocus></label><button class="primary-button">Sign in</button>{% endif %}
+      </form>
+      {% if setup.paused %}<form method="post" action="/settings" class="settings-cancel">{{ field('cancel') }}<button class="secondary-button">Cancel sign-in</button></form>{% endif %}
+      {% endif %}
+    {% endif %}
+  </section>
+  <section class="status-section"><h2>Import a Telegram export</h2><p class="muted">Use a Telegram Desktop JSON export. Enter the path on the computer running this archiver. Keep the exported media folders beside the JSON file. In Docker, use a path mounted inside the container.</p>
+    {% if not setup.busy and not setup.paused %}
+    <form method="post" action="/settings" class="settings-form">{{ field('preview') }}<label>Export JSON path<input name="path" value="{{ setup.path or '' }}" placeholder="/path/to/export/result.json" autocomplete="off" required></label><button class="primary-button">Preview import</button></form>
+    {% endif %}
+    {% if setup.preview is not none or setup.result is not none %}
+      <h3>{{ 'Import preview' if setup.preview is not none else 'Import results' }}</h3>
+      <dl>{% for name, count in (setup.preview if setup.preview is not none else setup.result).items() %}<dt>{{ name|replace('_', ' ')|capitalize }}</dt><dd>{{ count }}</dd>{% endfor %}</dl>
+      {% if setup.preview is not none and not setup.busy and not setup.paused %}<form method="post" action="/settings">{{ field('import') }}<button class="primary-button">Import messages and attachments</button></form>{% endif %}
+    {% endif %}
+    <p class="muted">Existing messages stay untouched. Collection pauses during preview and import, then resumes automatically. The export is validated again when importing.</p>
+  </section>
+  <p class="muted">API credentials are read from the server environment. Login codes and passwords are never saved in the archive.</p>
+</div>

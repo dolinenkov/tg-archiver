@@ -15,3 +15,7 @@
 {% macro avatar(title, id, large=false) -%}
 <span class="avatar color-{{ id|abs % 7 }} {{ 'avatar-large' if large else '' }}" aria-hidden="true" data-avatar-chat="{{ id }}" data-avatar-version="{{ avatar_versions.get(id, '') }}"><span>{{ initials(title) }}</span>{% if avatar_versions.get(id) %}<img src="/avatar/{{ id }}?v={{ avatar_versions[id] }}" alt="" loading="lazy" decoding="async" data-avatar-image>{% endif %}</span>
 {%- endmacro %}
+
+{% macro local_time(value, format='full') -%}
+<time{% if value %} datetime="{{ value }}" data-local-time="{{ format }}"{% endif %}>{{ value|short_date if format == 'short' else value|display_date }}</time>
+{%- endmacro %}

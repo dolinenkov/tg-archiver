@@ -7,6 +7,8 @@ from sqlalchemy import select, text
 from telethon import types, utils
 
 from .db import Attachment, Chat, Message, Sender, Version, VersionAttachment
+from .profiles import queue_profile
+from .transcription import index_versions, queue_transcription
 
 
 def stamp(value):
@@ -68,6 +70,7 @@ async def save_message(db, config, message, live=False, protected=False):
             chat = Chat(id=chat_id, kind=type(message.peer_id).__name__, title=str(chat_id))
             session.add(chat)
             await session.flush()
+        await queue_profile(session, chat_id, name=chat.title)
         if sender:
             sender_id = utils.get_peer_id(sender)
             name = utils.get_display_name(sender) or str(sender_id)
@@ -76,6 +79,10 @@ async def save_message(db, config, message, live=False, protected=False):
                 known.name = name
             else:
                 session.add(Sender(id=sender_id, name=name))
+            if config.included(sender_id):
+                await queue_profile(session, sender_id, sender, name)
+        elif message.sender_id is not None and config.included(message.sender_id):
+            await queue_profile(session, message.sender_id)
         saved = await session.scalar(select(Message).where(Message.chat_id == chat_id, Message.telegram_id == message.id))
         if not saved:
             saved = Message(chat_id=chat_id, telegram_id=message.id, sent_at=stamp(message.date),
@@ -111,6 +118,10 @@ async def save_message(db, config, message, live=False, protected=False):
                 attachment.priority = 1
             if not await session.get(VersionAttachment, (version.id, attachment.id)):
                 session.add(VersionAttachment(version_id=version.id, attachment_id=attachment.id))
+                await session.flush()
+            transcription = await queue_transcription(session, attachment, blocked)
+            if transcription and transcription.body:
+                await index_versions(session, [version.id])
         action = getattr(message, "action", None)
         if type(action).__name__ == "MessageActionChatMigrateTo":
             chat.migrated_to = utils.get_peer_id(types.PeerChannel(action.channel_id))

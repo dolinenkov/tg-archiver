@@ -35,6 +35,34 @@ tg-archiver run
 
 Pass `--config /path/to/config.toml` to any command. Paths in configuration are relative to that configuration file. On Windows, forward slashes work in TOML paths. Stop the application before running `login`, `chats`, or `retry`; a file lock prevents concurrent ownership of the session and data directory.
 
+## Sign in and import from the browser
+
+Start `tg-archiver run`, open the archive, and select **Settings** in the left navigation. API credentials still come from `TG_API_ID` and `TG_API_HASH` on the server.
+
+- **Telegram account:** enter your phone number, then the Telegram login code and two-step verification password if requested. The existing session is reused. Collection pauses during sign-in and resumes after success, cancellation, or expiry after five minutes. Codes and passwords are never stored in the archive.
+- **Import a Telegram export:** enter the JSON file's path on the machine running the archiver, choose **Preview import**, review the counts, then choose **Import messages and attachments**. Keep media folders beside the JSON. This reads local files rather than uploading them; in Docker, mount the export directory and use its container path.
+
+Preview and import pause collection automatically and reuse the running database and process lock. Work continues if you navigate away; return to Settings for results. Only one operation runs at a time. Settings refreshes automatically during work; without JavaScript, use the refresh link. CLI login and import remain available.
+
+## Import a Telegram Desktop export
+
+Stop the archiver, then point the offline importer at a Telegram Desktop **JSON** export. Keep its accompanying media folders beside `result.json`, with their original relative paths. Both single-chat exports and full-account exports (including `left_chats`) are supported. No Telegram login, API credentials, or network access is needed.
+
+```sh
+tg-archiver import /path/to/export/result.json --dry-run
+tg-archiver import /path/to/export/result.json
+# Custom configuration:
+tg-archiver import /path/to/export/result.json --config /path/to/config.toml
+```
+
+The dry run validates the entire JSON and reports new messages, existing messages, excluded messages, files to copy, missing files, and filtered media. It does not initialize or modify the archive database or copy media; the CLI may create the data directory and its lock file. The regular import uses the same exclusive lock as other commands.
+
+Import is additive: existing `(chat_id, message_id)` entries are skipped entirely, preserving captured edits, deletions, and collection checkpoints. Repeating an import is safe, but does not repair missing attachments on already imported messages. Chat exclusions and media filters apply. Available attachments are copied into `media/<chat_id>/<attachment_id>.<original extension>`; unavailable files are recorded without attempting Telegram downloads. Text is searchable immediately, timestamps are normalized to UTC, and original message JSON remains available under **Export metadata**.
+
+A full export's account ID is checked against the archive and recorded when available. Single-chat exports may not identify the owning account; use exports from the same account as the archive. Exports provide snapshots rather than complete edit/deletion histories. Later live collection may save a richer Telegram observation as another version. Cross-chat reply targets and album layout are not reconstructed; their original metadata is retained.
+
+JSON is loaded into memory and validated before import. Writes commit in batches of 100 messages; after interruption, rerun the command to skip completed batches. Keep the source export until import succeeds. No archive schema change or additional dependency is required.
+
 ## Run with Docker Compose
 
 Copy the example configuration to `config.toml`, retaining `data_dir = "data"`. Change **host to `"0.0.0.0"`** so the web server accepts connections through the container interface. Compose publishes port 8080 on host loopback only.
@@ -95,19 +123,43 @@ Restart after configuration changes. Exclusions stop future collection/downloads
 
 ## Browse and search
 
-The web UI uses a Telegram-style layout: a persistent chat sidebar with message previews, an independent conversation pane, and light/dark themes. On mobile, the chat list and conversation use separate views. Selecting chats and submitting search updates the main pane without reloading the sidebar; regular links also work without JavaScript. Conversations read oldest to newest and open at the latest message. Scroll upward to load older history while keeping your reading position.
+The web UI uses a Telegram-style layout: a persistent chat sidebar with message previews, an independent conversation pane, and light/dark themes. On mobile, the chat list and conversation use separate views. Selecting chats and submitting search updates the main pane without reloading the sidebar; regular links also work without JavaScript. Conversations read oldest to newest and open at the latest message. Scroll upward to load older history while keeping your reading position. Message times, chat previews, captured edits, status timestamps, and day dividers use the browser’s time zone and locale, including daylight-saving changes. Stored timestamps and search date filters remain UTC; without JavaScript, timestamps display in UTC.
 
-Current contact/group/channel avatars download in the background and are cached as `avatars/<chat_id>.jpg` inside the data directory. Discovery on startup and hourly checks for changed or removed photos; unchanged photos are reused. Excluded chats do not fetch new photos. The UI refreshes visible avatars automatically, with initials as a fallback. Only the current small profile photo is cached; profile-photo history is not collected. Failed avatar downloads honor flood waits and retry with backoff; `tg-archiver retry` also resets their retries.
+Current contact/group/channel avatars download in the background and are cached as `avatars/<chat_id>.jpg` inside the data directory. Discovery on startup and hourly checks for changed or removed photos; unchanged photos are reused. Excluded chats do not fetch new photos. The UI refreshes visible avatars automatically, with initials as a fallback. Full-size still profile photos and accessible photo history are also cached by the profile worker, including profiles of observed message senders. Failed avatar downloads honor flood waits and retry with backoff; `tg-archiver retry` also resets their retries.
 
 - `/`: chats ordered by their newest archived message, including excluded chats with existing archive data. Chats without messages appear last.
 - `/chat/ID`: messages in chronological order, opening at the latest message, sender labels, reply links, album IDs, captured versions, attachments.
+- `/profile/ID`: contact details, cached profile-photo history with a fullscreen viewer, and downloaded shared media/files grouped by category. Open profiles from sidebar avatars, conversation headers, or message sender names/photos.
 - `/search`: English/Russian case-insensitive words or quoted phrases, chat and date filters. Dates refer to the original message in UTC. Search includes older captured versions, with links to the matching version.
 - `/status`: connection state, history progress, reconciliation timestamps, download states, flood waits, and errors.
 - `/health`: database/process health; HTTP 503 on a fatal collection storage error. A healthy process does not guarantee Telegram authorization or connectivity; inspect `/status` too.
 
-Messages are plain escaped text with clickable HTTP(S) links. Supported image/audio/video types use native browser playback; unsupported codecs and other files can be downloaded. Polls, locations, contacts, and other specialized types have a structured metadata fallback. Consecutive album messages are grouped within each page; the UI does not recreate Telegram's visual layout. No OCR, transcription, fuzzy search, stemming, or search inside attachment files.
+Messages are plain escaped text with clickable HTTP(S) links. Supported image/audio/video types use native browser playback; unsupported codecs and other files can be downloaded. Polls, locations, contacts, and other specialized types have a structured metadata fallback. Consecutive album messages are grouped within each page; the UI does not recreate Telegram's visual layout. No OCR, fuzzy search, stemming, or document-content indexing. Telegram speech transcriptions are indexed separately from message text.
 
 Chats and search results load more as you scroll down; conversations load older messages as you scroll up, in batches of 50. Search filters remain active. A Load more link also works without JavaScript and lets you retry failed requests.
+
+## Edit history and speech recognition
+
+Every observed content change creates an immutable message version, including edits received live and different content found during history/reconciliation. Repeated observations do not create duplicate versions, and older observations never replace newer content. Expand **Version history** beneath an edited message to compare captured text, attachments, source times, and capture times. Search results open the matching saved version. Edits made before capture, or intermediate edits while the archiver was offline, cannot be reconstructed.
+
+Telegram-native transcription runs automatically for queued voice, audio, round-video, and video attachments. Existing archives are queued on startup too. Results appear beside the recording and update while the conversation is open. Search covers captions and recognized speech, including recordings attached to older saved versions. Recognition results are stored separately from immutable message versions and shared across references to the same Telegram media.
+
+```toml
+[archive]
+transcribe_audio = true # default; false stops new requests and keeps cached results
+```
+
+The worker calls Telegram's [`messages.transcribeAudio`](https://core.telegram.org/method/messages.transcribeAudio) on the original message. It never uploads local files or uses another recognition service, and does not need to download an attachment first. Telegram decides which media it supports; ordinary audio/video files may be rejected. Imported files without a verified Telegram media identity, inaccessible/deleted sources, and protected content are not transcribed.
+
+[Telegram Premium and free-trial limits](https://core.telegram.org/api/transcribe) apply. Free-trial exhaustion pauses new requests until Telegram's reset time; in-flight results can still complete. Premium-required errors pause new requests for a day. Pending results survive restarts and are recovered using Telegram updates or polling. Flood waits use the shared API throttle. Private chats get priority; excluded chats do not initiate recognition. Check **Status → Speech recognition** and each recording for progress or unavailable reasons. The CLI `retry` command resets failed recognition work after stopping the app.
+
+## Contact profiles and photos
+
+Profiles are collected for included dialogs and observed message senders, including group senders without a private conversation. Available fields include names, phone numbers, usernames, bio/description, birthday, account badges, last-seen information, common-group count, and business address/introduction/hours. Telegram privacy and API access determine which fields and photos are visible; the archiver does not enumerate every member of every group. Contact details are cached snapshots, with the last check time shown.
+
+A background worker downloads full-size **still images** from accessible profile-photo history, including current, personal, and public fallback photos where provided. Animated avatar video is not collected. Photos are cached under `avatars/profiles/<peer_id>/<photo_id>.jpg`, reused by sender avatars and profile galleries, and retained when a source photo is later removed. Nothing can recover photos deleted before collection. Downloads use atomic files, resume the history scan in pages of 20, honor flood waits and exclusions, and refresh daily; a changed current photo queues a fresh scan. Unavailable individual photos do not block the remaining history. Refresh the profile page to see newly collected details/photos.
+
+Shared media tabs list completed attachment downloads, deduplicated across captured revisions. A contact profile includes both directions of its private conversation plus files sent by that contact across archived chats. Group/channel profiles show the conversation’s downloaded files. Photo and file lists load more as you scroll. Files remain available offline through the existing attachment routes; category filters here do not change collection settings.
 
 ## Recovery and limits
 
@@ -131,7 +183,7 @@ tg-archiver run
 # docker compose up -d
 ```
 
-If Telegram revokes authorization, stop the service, run `login`, and restart. A data directory belongs to one Telegram account; do not reuse it for a different account. On persistent database errors or a full disk, collection stops and reports a fatal error rather than silently dropping writes; fix storage and restart.
+If Telegram revokes authorization, open **Settings** to sign in again, or stop the service, run `login`, and restart. A data directory belongs to one Telegram account; do not reuse it for a different account. On persistent database errors or a full disk, collection stops and reports a fatal error rather than silently dropping writes; fix storage and restart.
 
 Every **observed** content revision is retained. Intermediate edits missed during downtime, content deleted before capture, and unavailable old media cannot be recovered. Telethon's session checkpoint is separate from archive commits, so a crash can lose an uncommitted observation. Daily reconciliation checks the configured recent window; it cannot reconstruct historical edit sequences. Deletion notices are best effort; missing history entries are never treated as proof of deletion. Edits to counters/reactions alone do not create content revisions.
 

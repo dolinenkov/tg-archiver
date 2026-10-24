@@ -2,7 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from sqlalchemy import ForeignKey, String, Text, UniqueConstraint, event, select, text
+from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint, event, select, text
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -48,6 +48,30 @@ class Sender(Base):
     __tablename__ = "senders"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
     name: Mapped[str] = mapped_column(Text)
+
+
+class Profile(Base):
+    __tablename__ = "profiles"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    name: Mapped[str] = mapped_column(Text, default="")
+    details: Mapped[str] = mapped_column(Text, default="{}")
+    photo_id: Mapped[str] = mapped_column(default="")
+    updated_at: Mapped[str] = mapped_column(default="")
+    next_at: Mapped[float] = mapped_column(default=0.0, index=True)
+    photo_offset: Mapped[int] = mapped_column(default=0)
+    error: Mapped[str] = mapped_column(default="")
+
+
+class ProfilePhoto(Base):
+    __tablename__ = "profile_photos"
+    __table_args__ = (UniqueConstraint("profile_id", "telegram_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("profiles.id"), index=True)
+    telegram_id: Mapped[str] = mapped_column()
+    date: Mapped[str] = mapped_column(default="")
+    path: Mapped[str | None] = mapped_column()
+    kind: Mapped[str] = mapped_column(default="Profile photo")
+    error: Mapped[str] = mapped_column(default="")
 
 
 class Message(Base):
@@ -96,7 +120,22 @@ class Attachment(Base):
 class VersionAttachment(Base):
     __tablename__ = "version_attachments"
     version_id: Mapped[int] = mapped_column(ForeignKey("versions.id"), primary_key=True)
+    attachment_id: Mapped[int] = mapped_column(ForeignKey("attachments.id"), primary_key=True, index=True)
+
+
+class Transcription(Base):
+    __tablename__ = "transcriptions"
+    __table_args__ = (Index("ix_transcriptions_source", "source_chat_id", "source_message_id"),)
     attachment_id: Mapped[int] = mapped_column(ForeignKey("attachments.id"), primary_key=True)
+    state: Mapped[str] = mapped_column(default="pending", index=True)
+    body: Mapped[str] = mapped_column(Text, default="")
+    telegram_id: Mapped[str] = mapped_column(default="")
+    source_chat_id: Mapped[int | None] = mapped_column()
+    source_message_id: Mapped[int | None] = mapped_column()
+    retry_at: Mapped[float] = mapped_column(default=0.0)
+    attempts: Mapped[int] = mapped_column(default=0)
+    error: Mapped[str] = mapped_column(default="")
+    updated_at: Mapped[str] = mapped_column(default="")
 
 
 class Setting(Base):
@@ -122,6 +161,8 @@ class Database:
         async with self.engine.begin() as connection:
             await connection.exec_driver_sql("PRAGMA journal_mode=WAL")
             await connection.run_sync(Base.metadata.create_all)
+            await connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_version_attachments_attachment_id ON version_attachments(attachment_id)")
+            await connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_transcriptions_source ON transcriptions(source_chat_id,source_message_id)")
             await connection.exec_driver_sql("CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(body, tokenize='unicode61')")
         async with self.write() as session:
             schema = await session.get(Setting, "schema")
@@ -129,7 +170,18 @@ class Database:
                 raise RuntimeError("Unsupported archive schema; use a compatible application version")
             if not schema:
                 session.add(Setting(key="schema", value="1"))
+            # Additive upgrade: existing dialogs and observed senders need profiles too.
+            await session.execute(text("INSERT OR IGNORE INTO profiles (id,name,details,photo_id,updated_at,next_at,photo_offset,error) SELECT id,title,'{}','','',0,0,'' FROM chats"))
+            await session.execute(text("INSERT OR IGNORE INTO profiles (id,name,details,photo_id,updated_at,next_at,photo_offset,error) SELECT id,name,'{}','','',0,0,'' FROM senders"))
+            await session.execute(text("INSERT OR IGNORE INTO profiles (id,name,details,photo_id,updated_at,next_at,photo_offset,error) SELECT DISTINCT sender_id,'','{}','','',0,0,'' FROM messages WHERE sender_id IS NOT NULL"))
             await session.execute(text("UPDATE attachments SET state='pending' WHERE state='downloading'"))
+            await session.execute(text("""INSERT OR IGNORE INTO transcriptions
+                (attachment_id,state,body,telegram_id,source_chat_id,source_message_id,retry_at,attempts,error,updated_at)
+                SELECT id,CASE WHEN error='Protected content' OR media_key LIKE 'export:%' THEN 'unavailable' ELSE 'pending' END,
+                '','',NULL,NULL,0,0,CASE WHEN error='Protected content' THEN error
+                WHEN media_key LIKE 'export:%' THEN 'Imported media has no Telegram identity' ELSE '' END,''
+                FROM attachments WHERE category IN ('voice','video_notes','audio','videos')"""))
+            await session.execute(text("UPDATE transcriptions SET state='pending' WHERE state='requesting'"))
 
     @asynccontextmanager
     async def write(self):
@@ -151,5 +203,8 @@ class Database:
         async with self.write() as session:
             await session.execute(text("UPDATE attachments SET state='pending', attempts=0, retry_at=0, error='' WHERE state IN ('error','unavailable')"))
             await session.execute(text("UPDATE avatars SET attempts=0, retry_at=0, error='' WHERE error != ''"))
+            await session.execute(text("UPDATE profiles SET next_at=0,error='' WHERE error != ''"))
+            await session.execute(text("UPDATE transcriptions SET state='pending',retry_at=0,attempts=0,error='' WHERE state IN ('error','unavailable')"))
+            await session.execute(text("DELETE FROM settings WHERE key='transcription_retry_at'"))
             for chat in (await session.scalars(select(Chat).where(Chat.error != ""))).all():
                 chat.error = ""

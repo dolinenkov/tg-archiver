@@ -16,7 +16,7 @@
 - No built-in web authentication; access through localhost, SSH tunnel, or a secured reverse proxy.
 - Chat and content settings live in a configuration file; restart to apply changes.
 - Exclusions stop future collection and never remove existing archived data.
-- Search text and captions across saved versions, with chat and date filters. No OCR, transcription, or attachment-content indexing initially.
+- Search text and captions across saved versions, with chat and date filters. Include Telegram-native speech transcription results where the account and media are eligible. No OCR or general document-content indexing.
 - Download enabled attachments without a default size cap; provide an optional size limit. Expose failures and allow retries.
 - Expected scale: approximately 100 chats; up to 1 TB of storage is acceptable.
 - Best-effort cloud-chat capture: preserve every observed version; secret chats and content unavailable before capture cannot be recovered. Respect content-protection restrictions and report unavailable content.

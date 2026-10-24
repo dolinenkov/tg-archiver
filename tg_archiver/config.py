@@ -18,6 +18,7 @@ class Config:
     reconcile_seconds: int = 86400
     reconcile_days: int = 7
     max_file_bytes: int = 0
+    transcribe_audio: bool = True
     excluded_chats: set[int] = field(default_factory=set)
     media: dict[str, bool] = field(default_factory=lambda: dict.fromkeys(CATEGORIES, True))
     chats: dict[int, dict] = field(default_factory=dict)
@@ -42,7 +43,7 @@ def load(path: Path) -> Config:
     archive = raw.get("archive", {})
     if not isinstance(archive, dict) or not isinstance(raw.get("chats", {}), dict):
         raise ValueError("archive and chats must be configuration tables")
-    fields = {"data_dir", "host", "port", "discovery_seconds", "reconcile_seconds", "reconcile_days", "max_file_bytes", "excluded_chats"}
+    fields = {"data_dir", "host", "port", "discovery_seconds", "reconcile_seconds", "reconcile_days", "max_file_bytes", "excluded_chats", "transcribe_audio"}
     if set(archive) - fields:
         raise ValueError("Unknown archive setting")
     config = Config(**archive)
@@ -51,7 +52,9 @@ def load(path: Path) -> Config:
     config.data_dir = (path.resolve().parent / config.data_dir).resolve()
     if not isinstance(config.host, str):
         raise ValueError("host must be a string")
-    for name in fields - {"data_dir", "host", "excluded_chats"}:
+    if type(config.transcribe_audio) is not bool:
+        raise ValueError("transcribe_audio must be boolean")
+    for name in fields - {"data_dir", "host", "excluded_chats", "transcribe_audio"}:
         value = getattr(config, name)
         if type(value) is not int or value < (0 if name == "max_file_bytes" else 1):
             raise ValueError(f"Invalid {name}")

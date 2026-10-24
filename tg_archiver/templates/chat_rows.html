@@ -1,8 +1,8 @@
-{% from 'macros.html' import avatar with context %}
+{% from 'macros.html' import avatar, local_time with context %}
 {% for row in sidebar_chats %}
-<a href="/chat/{{ row.chat.id }}" data-nav data-chat-link="{{ row.chat.id }}" data-scroll-key="chat-{{ row.chat.id }}" class="chat-row {{ 'selected' if row.chat.id == current_chat_id else '' }}" {% if row.chat.id == current_chat_id %}aria-current="page"{% endif %}>
-  {{ avatar(row.chat.title, row.chat.id) }}
-  <span class="chat-row-text"><span class="chat-row-top"><strong>{{ row.chat.title }}</strong><time>{{ row.latest_at|short_date }}</time></span><span class="chat-preview">{{ row.preview or ('No messages archived yet' if row.chat.done else 'Collecting history…') }}</span></span>
+<div data-chat-link="{{ row.chat.id }}" data-scroll-key="chat-{{ row.chat.id }}" class="chat-row {{ 'selected' if row.chat.id == current_chat_id else '' }}" {% if row.chat.id == current_chat_id %}aria-current="page"{% endif %}>
+  <a class="avatar-link" href="/profile/{{ row.chat.id }}" data-nav aria-label="View profile of {{ row.chat.title }}">{{ avatar(row.chat.title, row.chat.id) }}</a>
+  <a href="/chat/{{ row.chat.id }}" data-nav class="chat-row-text"><span class="chat-row-top"><strong>{{ row.chat.title }}</strong>{{ local_time(row.latest_at, 'short') }}</span><span class="chat-preview">{{ row.preview or ('No messages archived yet' if row.chat.done else 'Collecting history…') }}</span></a>
   {% if not row.chat.enabled %}<span class="chat-excluded" title="Excluded from collection">Paused</span>{% endif %}
-</a>
+</div>
 {% else %}<div class="list-empty">No chats yet.<br>Your conversations will appear here once discovered.</div>{% endfor %}

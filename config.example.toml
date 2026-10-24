@@ -6,6 +6,7 @@ discovery_seconds = 3600
 reconcile_seconds = 86400
 reconcile_days = 7
 max_file_bytes = 0 # 0 = no size cap
+transcribe_audio = true # Telegram speech recognition; Premium/trial limits apply
 excluded_chats = [] # stable numeric IDs from the chats command
 
 [media]

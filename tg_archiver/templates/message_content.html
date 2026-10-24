@@ -1,0 +1,13 @@
+<div class="body">{{ message_text(version.body) }}</div>
+{{ fallback(version.raw, version.body) }}
+{% for attachment in version_attachments[version.id] %}
+  {% include 'attachment.html' %}
+  {% set transcript = transcripts.get(attachment.id) %}
+  {% if transcript %}
+  <details class="transcript" open data-transcription-id="{{ attachment.id }}" data-transcription-state="{{ transcript.state }}" {% if not transcription_enabled %}data-transcribe-off{% endif %}>
+    <summary>Telegram transcription · <span data-transcript-status>{{ transcript.state if transcription_enabled or transcript.body else 'disabled' }}</span></summary>
+    <div class="body" data-transcript-body {% if not transcript.body %}hidden{% endif %}>{{ message_text(transcript.body) }}</div>
+    <small class="muted" data-transcript-error>{{ transcript.error }}</small>
+  </details>
+  {% endif %}
+{% endfor %}

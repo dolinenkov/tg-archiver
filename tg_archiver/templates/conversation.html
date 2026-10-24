@@ -1,12 +1,12 @@
 {% from 'macros.html' import icon, avatar with context %}
 <header class="conversation-header">
   <a class="icon-button mobile-back" href="/" data-nav aria-label="Back to chats">{{ icon('back') }}</a>
-  {{ avatar(current.title, current.id) }}
-  <div class="conversation-heading"><h1>{{ current.title }}</h1><p>{{ 'Private conversation' if current.id > 0 else 'Group / channel' }} <span>·</span> Archived history</p></div>
+  <a class="conversation-profile" href="/profile/{{ current.id }}" data-nav aria-label="View profile of {{ current.title }}">{{ avatar(current.title, current.id) }}
+  <div class="conversation-heading"><h1>{{ current.title }}</h1><p>{{ 'Private conversation' if current.id > 0 else 'Group / channel' }} <span>·</span> Archived history</p></div></a>
   <a class="icon-button" href="/search?chat={{ current.id }}" data-nav aria-label="Search this conversation" title="Search this conversation">{{ icon('search') }}</a>
 </header>
 <div class="conversation-scroll" data-scroll-region="messages" data-scroll-viewport data-scroll-direction="older" {% if view == 'chat' %}data-scroll-start="latest"{% else %}data-scroll-target="m{{ target_id }}"{% endif %}>
-  <div class="conversation-intro"><span>{{ 'MESSAGE CONTEXT' if view == 'message' else 'CONVERSATION HISTORY' }}</span><span>Chronological · UTC</span></div>
+  <div class="conversation-intro"><span>{{ 'MESSAGE CONTEXT' if view == 'message' else 'CONVERSATION HISTORY' }}</span><span>Chronological · <span data-browser-zone>UTC</span></span></div>
   {% if current.migrated_to %}<p class="notice">This chat migrated to <a href="/chat/{{ current.migrated_to }}" data-nav>{{ current.migrated_to }}</a>.</p>{% endif %}
   {% if view == 'message' %}<p class="context-link"><a href="/chat/{{ current.id }}" data-nav>← Back to conversation</a></p>{% endif %}
   {{ footer }}

@@ -1,0 +1,26 @@
+{% from 'macros.html' import avatar, icon, local_time with context %}
+<header class="conversation-header"><a class="icon-button mobile-back" href="/" data-nav aria-label="Back to chats">{{ icon('back') }}</a><span class="header-symbol">{{ icon('chats', 23) }}</span><div class="conversation-heading"><h1>Profile</h1><p>Contact information and shared files</p></div><a class="icon-button" href="/profile/{{ current.id }}" data-nav title="Refresh profile" aria-label="Refresh profile">{{ icon('activity') }}</a></header>
+<div class="utility-scroll profile-content" data-scroll-viewport>
+  <section class="profile-card profile-summary">
+    {% if photos %}<a class="profile-avatar-link" href="/profile-photo/{{ photos[0].id }}" data-profile-photo-trigger aria-label="Open profile photo">{{ avatar(profile_name, current.id, true) }}</a>{% else %}{{ avatar(profile_name, current.id, true) }}{% endif %}
+    <div><h2>{{ profile_name }}</h2><p>{{ 'Contact' if current.id > 0 else 'Group / channel' }} · {{ current.id }}</p>{% if has_conversation %}<a class="profile-conversation-link" href="/chat/{{ current.id }}" data-nav>Open conversation →</a>{% endif %}</div>
+  </section>
+  <section class="profile-card profile-details"><h2>Contact information</h2>
+    {% if details %}<dl>{% for name, value in details.items() %}<dt>{{ name }}</dt><dd>{% if name == 'Last seen at' %}{{ local_time(value) }}{% elif name == 'Bio / description' %}{{ message_text(value) }}{% elif name == 'Phone number' %}<a href="tel:{{ value }}">+{{ value|replace('+', '') }}</a>{% elif name == 'Username' %}<a href="https://t.me/{{ value }}" rel="noreferrer noopener">@{{ value }}</a>{% else %}{{ value }}{% endif %}</dd>{% endfor %}</dl>
+    {% else %}<p class="muted">Contact details have not been fetched yet. They will appear after background collection.</p>{% endif %}
+    {% if profile and profile.updated_at %}<p class="muted">Last checked {{ local_time(profile.updated_at) }}</p>{% endif %}
+    {% if profile and profile.error %}<p class="muted">Some details or photos could not be fetched ({{ profile.error }}). Collection will retry.</p>{% endif %}
+    <p class="muted">Only information visible to your Telegram account can be collected. Hidden phone numbers and unavailable photos cannot be recovered.</p>
+  </section>
+  <section class="profile-card"><div class="profile-section-heading"><h2>Profile photos</h2><span class="muted">Full-size · newest first</span></div>
+    <div class="profile-photo-scroll" data-scroll-region="profile-photos">
+      <div class="profile-photo-grid" data-scroll-list>{% for photo in photos %}<a class="profile-photo-tile" href="/profile-photo/{{ photo.id }}" data-profile-photo data-photo-caption="{{ photo.kind }}{% if photo.date %} · {{ photo.date|display_date }}{% endif %}" data-scroll-key="profile-photo-{{ photo.id }}"><img src="/profile-photo/{{ photo.id }}" alt="{{ photo.kind }} of {{ profile_name }}" loading="lazy"><span>{{ local_time(photo.date, 'short') if photo.date else photo.kind }}</span></a>{% endfor %}</div>
+      {% if not photos %}<p class="muted">No profile photos cached yet. Accessible photo history downloads in the background; refresh to see new photos.</p>{% endif %}
+      {{ photo_footer }}
+    </div>
+  </section>
+  <section class="profile-card"><h2>Shared media and files</h2><p class="muted">{% if current.id > 0 %}Downloaded files shared in this conversation or sent by this contact across archived chats.{% else %}Downloaded files from this conversation, including captured revisions.{% endif %}</p>
+    <nav class="profile-tabs" aria-label="Shared media categories">{% for tab in tabs %}<a href="/profile/{{ current.id }}?tab={{ tab.key }}" data-nav class="{{ 'selected' if tab.key == selected_tab else '' }}" {% if tab.key == selected_tab %}aria-current="page"{% endif %}>{{ tab.label }} <span>{{ tab.count }}</span></a>{% endfor %}</nav>
+    <div class="profile-files-scroll" data-scroll-region="profile-files"><div class="profile-files" data-scroll-list>{% for attachment in attachments %}<article data-scroll-key="profile-file-{{ attachment.id }}">{% include 'attachment.html' %}</article>{% endfor %}</div>{% if not attachments %}<p class="muted">No downloaded files in this category yet.</p>{% endif %}{{ media_footer }}</div>
+  </section>
+</div>

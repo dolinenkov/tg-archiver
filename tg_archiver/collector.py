@@ -14,6 +14,8 @@ from .archive import media_info, save_deletions, save_message
 from .avatars import cached_file, photo_id
 from .config import credentials
 from .db import Attachment, Avatar, Chat, Message, Setting, Version, VersionAttachment, now
+from .profiles import collect_profiles, queue_profile
+from .transcription import collect_transcriptions, save_update
 
 
 log = logging.getLogger(__name__)
@@ -45,14 +47,38 @@ class Collector:
         self.client.add_event_handler(self.on_message, events.NewMessage())
         self.client.add_event_handler(self.on_message, events.MessageEdited())
         self.client.add_event_handler(self.on_delete, events.MessageDeleted())
+        self.client.add_event_handler(self.on_transcription, events.Raw(types.UpdateTranscribedAudio))
         self.tasks = [asyncio.create_task(self.guard(name, work), name=name) for name, work in [
             ("connection", self.connection), ("history", self.history), ("attachments", self.downloads),
-            ("avatars", self.avatars)]]
+            ("avatars", self.avatars), ("profiles", self.profiles), ("transcriptions", self.transcriptions)]]
+
+    async def transcriptions(self):
+        await collect_transcriptions(self)
+
+    async def on_transcription(self, update):
+        await self.ready.wait()
+        if self.fatal or not self.verified:
+            return
+        try:
+            await save_update(self, update)
+        except (SQLAlchemyError, OSError) as error:
+            self.fatal = f"Transcription storage failure ({type(error).__name__}); collection stopped"
+            self.ready.clear()
+            log.error(self.fatal)
+            await self.client.disconnect()
+
+    async def profiles(self):
+        await collect_profiles(self)
 
     async def stop(self):
         for task in self.tasks:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        self.client.remove_event_handler(self.on_message)
+        self.client.remove_event_handler(self.on_delete)
+        self.client.remove_event_handler(self.on_transcription)
+        self.verified = False
+        self.ready.clear()
         await self.client.disconnect()
 
     async def guard(self, name, work):
@@ -114,7 +140,7 @@ class Collector:
                 await self.client.connect()
                 if not await self.client.is_user_authorized():
                     self.ready.clear()
-                    await self.db.set_status("connection", "Authorization required: stop and run login")
+                    await self.db.set_status("connection", "Authorization required: open Settings to sign in")
                     await self.client.disconnect()
                     await asyncio.sleep(60)
                     continue
@@ -191,6 +217,7 @@ class Collector:
                     chat.config_hash = fingerprint
                 if chat.enabled:
                     await self.queue_avatar(session, chat.id, dialog.entity)
+                    await queue_profile(session, chat.id, dialog.entity, dialog.name or str(chat.id))
         await self.db.set_status("discovered", now())
 
     async def queue_avatar(self, session, chat_id, entity):

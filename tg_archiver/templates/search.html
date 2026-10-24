@@ -1,16 +1,16 @@
-{% from 'macros.html' import icon %}
+{% from 'macros.html' import icon, local_time %}
 <header class="conversation-header"><a class="icon-button mobile-back" href="/" data-nav aria-label="Back to chats">{{ icon('back') }}</a><span class="header-symbol">{{ icon('search', 23) }}</span><div class="conversation-heading"><h1>Search archive</h1><p>Find the words. Rediscover the moment.</p></div></header>
 <div class="utility-scroll" data-scroll-region="search" data-scroll-viewport>
   <form class="search-form" action="/search" data-nav-form>
     <label class="search-query">Message text<input name="q" value="{{ query }}" placeholder="Search words or a quoted phrase…" maxlength="500"></label>
     <label>Conversation<select name="chat"><option value="">All chats</option>{% for c in chat_options %}<option value="{{ c.id }}" {% if selected == c.id|string %}selected{% endif %}>{{ c.title }}</option>{% endfor %}</select></label>
-    <label>From<input type="date" name="from" value="{{ from_date }}"></label><label>To<input type="date" name="to" value="{{ to_date }}"></label>
+    <label>From (UTC)<input type="date" name="from" value="{{ from_date }}"></label><label>To (UTC)<input type="date" name="to" value="{{ to_date }}"></label>
     <button class="primary-button">{{ icon('search', 17) }} Search</button>
   </form>
-  <p class="search-hint">Search includes saved message versions. Dates use the original message time in UTC.</p>
+  <p class="search-hint">Search includes saved message versions and Telegram transcriptions. Dates use the original message time in UTC.</p>
   {% if search_error %}<p class="notice error" role="alert">{{ search_error }}</p>{% endif %}
   <div class="search-results" data-scroll-list>
-    {% for row in results %}<article class="search-result" data-scroll-key="version-{{ row.id }}"><a href="/message/{{ row.chat_id }}/{{ row.telegram_id }}?version={{ row.id }}#m{{ row.telegram_id }}" data-nav><span class="result-heading"><strong>{{ row.title }}</strong><time>{{ row.sent_at|display_date }}</time></span><div class="body">{{ row.body[:1000] }}</div><span class="result-action">Open in conversation →</span></a></article>
+    {% for row in results %}<article class="search-result" data-scroll-key="version-{{ row.id }}"><a href="/message/{{ row.chat_id }}/{{ row.telegram_id }}?version={{ row.id }}#m{{ row.telegram_id }}" data-nav><span class="result-heading"><strong>{{ row.title }}</strong>{{ local_time(row.sent_at) }}</span><div class="body">{{ row.body[:1000] }}</div>{% if row.transcript %}<div class="search-transcript"><strong>Telegram transcription</strong><div class="body">{{ row.transcript[:1000] }}</div></div>{% endif %}<span class="result-action">Open in conversation →</span></a></article>
     {% else %}<div class="conversation-empty">{{ icon('search', 40) }}<h2>{{ 'No messages found' if query else 'Something on your mind?' }}</h2><p>{{ 'Try different words or a wider date range.' if query else 'Search across your conversations and saved versions.' }}</p></div>{% endfor %}
   </div>
   {{ footer }}

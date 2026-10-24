@@ -62,6 +62,28 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
             message = await session.scalar(select(Message))
             self.assertEqual((await session.get(Version, message.latest_id)).body, "A")
 
+    async def test_edited_events_preserve_reverts_and_history_view_opens_selected_version(self):
+        collector = Collector.__new__(Collector)
+        collector.db, collector.config, collector.fatal, collector.verified = self.db, self.config, None, True
+        collector.ready = asyncio.Event()
+        collector.ready.set()
+        for body, edited in [('Original', 0), ('Changed', 20), ('Original', 40), ('Late older edit', 10), ('Original', 40)]:
+            await collector.on_message(SimpleNamespace(chat_id=42, chat=None, message=self.message(body, edited)))
+        async with self.db.session() as session:
+            message = await session.scalar(select(Message))
+            versions = (await session.scalars(select(Version).order_by(Version.source_at.desc()))).all()
+            self.assertEqual(len(versions), 4)
+            self.assertEqual((await session.get(Version, message.latest_id)).body, 'Original')
+            selected = next(version for version in versions if version.body == 'Changed')
+        async with TestClient(TestServer(make_app(self.db, self.config, SimpleNamespace(fatal=None)))) as client:
+            response = await client.get(f'/message/42/1?version={selected.id}')
+            body = await response.text()
+            self.assertIn('Version history · 4 saved versions', body)
+            self.assertIn('class="message-history" open', body)
+            self.assertIn(f'data-version-id="{selected.id}"', body)
+            self.assertIn('selected-version', body)
+            self.assertLess(body.index('Changed'), body.index('Late older edit'))
+
     async def test_deletion_ids_do_not_cross_channel_boundaries(self):
         await save_message(self.db, self.config, self.message("private"))
         await save_message(self.db, self.config, self.message("channel", peer=types.PeerChannel(77)))
@@ -441,6 +463,24 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(re.findall('data-scroll-key=', body)), 3)
                 self.assertNotIn('data-scroll-next', body)
                 self.assertIn('Beginning of conversation.' if region == 'messages' else 'All items loaded.', body)
+
+    async def test_ui_exposes_utc_instants_for_browser_time_formatting(self):
+        await save_message(self.db, self.config, self.message("original"))
+        await save_message(self.db, self.config, self.message("edited", 20))
+        await self.db.set_status("discovered", self.date.isoformat())
+        await self.db.set_status("last_error", self.date.isoformat() + " ExampleError")
+        async with self.db.write() as session:
+            (await session.get(Chat, 42)).reconciled = self.date.isoformat()
+        async with TestClient(TestServer(make_app(self.db, self.config, SimpleNamespace(fatal=None)))) as client:
+            for path in ('/chat/42', '/search?q=edited', '/status'):
+                body = await (await client.get(path)).text()
+                self.assertIn('datetime="2026-01-01T00:00:00+00:00"', body)
+                self.assertIn('data-local-time="full"', body)
+            body = await (await client.get('/chat/42')).text()
+            self.assertIn('data-sent-at="2026-01-01T00:00:00+00:00"', body)
+            self.assertIn('data-source-at="2026-01-01T00:00:20+00:00"', body)
+            self.assertIn('data-local-time="short"', body)
+            self.assertIn('data-browser-zone', body)
 
     async def test_jinja_layout_escapes_metadata_and_marks_own_messages(self):
         from tg_archiver.db import Setting

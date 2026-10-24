@@ -1,13 +1,21 @@
-{% from 'macros.html' import icon with context %}
-<article id="m{{ message.telegram_id }}" data-scroll-key="message-{{ message.id }}" class="message {{ 'outgoing' if outgoing else '' }}">
-  <div class="message-sender">{{ sender }}</div>
+{% from 'macros.html' import icon, local_time, avatar with context %}
+<article id="m{{ message.telegram_id }}" data-scroll-key="message-{{ message.id }}" data-sent-at="{{ message.sent_at }}" class="message {{ 'outgoing' if outgoing else '' }}">
+  <div class="message-sender">{% if message.sender_id is not none %}<a href="/profile/{{ message.sender_id }}" data-nav class="sender-profile">{{ avatar(sender, message.sender_id) }}<span>{{ sender }}</span></a>{% else %}{{ sender }}{% endif %}</div>
   {% if message.reply_to %}<a class="reply-preview" href="/message/{{ message.chat_id }}/{{ message.reply_to }}" data-nav>Reply to #{{ message.reply_to }}</a>{% endif %}
-  {% for version in versions %}
-    {% if version.id != message.latest_id %}<details class="message-version" {% if expanded == version.id %}open{% endif %}><summary>Earlier version · {{ version.source_at|display_date }}</summary><small class="muted">Captured {{ version.observed_at|display_date }}</small>{% endif %}
-    <div class="body">{{ message_text(version.body) }}</div>
-    {{ fallback(version.raw, version.body) }}
-    {% for attachment in version_attachments[version.id] %}{% include 'attachment.html' %}{% endfor %}
-    {% if version.id == message.latest_id %}<div class="message-meta">{% if message.deleted_at %}<span class="deleted-label">Deleted in Telegram</span>{% endif %}{% if versions|length > 1 %}<span>edited</span>{% endif %}{% if message.album %}<span>Album {{ message.album }}</span>{% endif %}<time title="Sent: {{ message.sent_at }} · Captured: {{ version.observed_at }} · Source: {{ version.source_at }}">{{ message.sent_at|display_date }}</time>{% if outgoing %}{{ icon('check', 15) }}{% endif %}</div>
-    {% else %}</details>{% endif %}
+  {% for version in versions if version.id == message.latest_id %}
+    {% include 'message_content.html' %}
+    <div class="message-meta">{% if message.deleted_at %}<span class="deleted-label">Deleted in Telegram</span>{% endif %}{% if versions|length > 1 or version.source_at != message.sent_at %}<span>edited</span>{% endif %}{% if message.album %}<span>Album {{ message.album }}</span>{% endif %}<time datetime="{{ message.sent_at }}" data-local-time="full" data-captured-at="{{ version.observed_at }}" data-source-at="{{ version.source_at }}" title="Sent: {{ message.sent_at }} · Captured: {{ version.observed_at }} · Source: {{ version.source_at }}">{{ message.sent_at|display_date }}</time>{% if outgoing %}{{ icon('check', 15) }}{% endif %}</div>
   {% endfor %}
+  {% if versions|length > 1 %}
+  <details class="message-history" {% if expanded and expanded != message.latest_id %}open{% endif %}>
+    <summary>Version history · {{ versions|length }} saved versions</summary>
+    {% for version in versions %}
+    <section class="version-entry {{ 'selected-version' if expanded == version.id else '' }}" id="v{{ version.id }}" data-version-id="{{ version.id }}">
+      <h3>{{ 'Current version' if version.id == message.latest_id else 'Earlier version' }} · {{ local_time(version.source_at) }}</h3>
+      <small class="muted">Captured {{ local_time(version.observed_at) }}</small>
+      {% include 'message_content.html' %}
+    </section>
+    {% endfor %}
+  </details>
+  {% endif %}
 </article>
