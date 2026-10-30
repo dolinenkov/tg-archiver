@@ -505,12 +505,14 @@ class Collector:
                     async with self.db.write() as session:
                         attachment = await session.get(Attachment, item.id)
                         attachment.path, attachment.state, attachment.error = relative, "complete", ""
+                        attachment.retry_at, attachment.attempts = 0, 0
                     found = True
                     break
                 except (errors.ForbiddenError, errors.BadRequestError, ValueError):
                     continue
             if not found:
-                await self.finish(item.id, "unavailable", "Source missing, changed, protected, or inaccessible")
+                delay = min(86400, 3600 * 2 ** min(item.attempts, 5))
+                await self.finish(item.id, "error", "Source missing, changed, protected, or inaccessible", time.time() + delay)
         except errors.FloodWaitError as error:
             await self.flood(error)
             await self.finish(item.id, "error", "Telegram flood wait", self.flood_until)

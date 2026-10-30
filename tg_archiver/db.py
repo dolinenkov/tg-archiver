@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import time
 
 from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint, event, select, text
 from sqlalchemy.engine import URL
@@ -175,6 +176,8 @@ class Database:
             await session.execute(text("INSERT OR IGNORE INTO profiles (id,name,details,photo_id,updated_at,next_at,photo_offset,error) SELECT id,name,'{}','','',0,0,'' FROM senders"))
             await session.execute(text("INSERT OR IGNORE INTO profiles (id,name,details,photo_id,updated_at,next_at,photo_offset,error) SELECT DISTINCT sender_id,'','{}','','',0,0,'' FROM messages WHERE sender_id IS NOT NULL"))
             await session.execute(text("UPDATE attachments SET state='pending' WHERE state='downloading'"))
+            # Retry older transient failures, but not protected or imported media.
+            await session.execute(text("UPDATE attachments SET state='error', retry_at=:retry WHERE state='unavailable' AND error='Source missing, changed, protected, or inaccessible' AND media_key NOT LIKE 'export:%'"), {"retry": time.time() + 3600})
             await session.execute(text("""INSERT OR IGNORE INTO transcriptions
                 (attachment_id,state,body,telegram_id,source_chat_id,source_message_id,retry_at,attempts,error,updated_at)
                 SELECT id,CASE WHEN error='Protected content' OR media_key LIKE 'export:%' THEN 'unavailable' ELSE 'pending' END,

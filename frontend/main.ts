@@ -9,6 +9,108 @@ let avatarRefresh: number | undefined;
 let fetchingAvatars = false;
 let fetchingTranscripts = false;
 
+function localDay(date: Date): string {
+  return `${String(date.getFullYear()).padStart(4, '0')}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function updateDateBubble(): void {
+  const region = document.querySelector<HTMLElement>('[data-scroll-region="messages"]');
+  const bubble = document.querySelector<HTMLButtonElement>('[data-date-bubble]');
+  if (!region || !bubble) return;
+  const bounds = region.getBoundingClientRect();
+  const messages = Array.from(region.querySelectorAll<HTMLElement>('.message[data-sent-at]'));
+  const visible = messages.find(node => node.getBoundingClientRect().bottom > bounds.top + 45) ?? messages.at(-1);
+  bubble.hidden = !visible;
+  if (!visible) return;
+  const date = new Date(visible.dataset.sentAt!);
+  bubble.dataset.date = localDay(date);
+  const label = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' }).format(date);
+  bubble.querySelector('[data-date-hint]')!.textContent = label;
+  bubble.setAttribute('aria-label', `${label} · Jump to date`);
+}
+
+const calendar = document.querySelector<HTMLDialogElement>('#history-calendar')!;
+const monthInput = calendar.querySelector<HTMLInputElement>('[data-calendar-month]')!;
+let calendarDay = '';
+let calendarChat = '';
+
+function calendarDate(year: number, month: number, day: number): Date {
+  const date = new Date(0);
+  date.setFullYear(year, month, day);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function renderCalendar(): void {
+  if (!/^\d{4}-\d{2}$/.test(monthInput.value)) return;
+  const [year, month] = monthInput.value.split('-').map(Number);
+  if (year < 1 || year > 9999 || month < 1 || month > 12) return;
+  const grid = calendar.querySelector<HTMLElement>('[data-calendar-days]')!;
+  const weekdays = calendar.querySelector<HTMLElement>('[data-calendar-weekdays]')!;
+  grid.replaceChildren();
+  weekdays.replaceChildren();
+  const dayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short' });
+  for (let i = 0; i < 7; i++) {
+    const label = document.createElement('span');
+    label.textContent = dayFormat.format(calendarDate(2026, 0, 5 + i));
+    weekdays.append(label);
+  }
+  const first = calendarDate(year, month - 1, 1);
+  for (let i = 0; i < (first.getDay() + 6) % 7; i++) grid.append(document.createElement('span'));
+  const days = calendarDate(year, month, 0).getDate();
+  const today = localDay(new Date());
+  for (let day = 1; day <= days; day++) {
+    const date = calendarDate(year, month - 1, day);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.calendarDate = localDay(date);
+    button.textContent = String(day);
+    button.setAttribute('aria-label', new Intl.DateTimeFormat(undefined, { dateStyle: 'full' }).format(date));
+    button.setAttribute('aria-pressed', String(button.dataset.calendarDate === calendarDay));
+    if (button.dataset.calendarDate === today) button.setAttribute('aria-current', 'date');
+    grid.append(button);
+  }
+  calendar.querySelector<HTMLButtonElement>('[data-calendar-prev]')!.disabled = year === 1 && month === 1;
+  calendar.querySelector<HTMLButtonElement>('[data-calendar-next]')!.disabled = year === 9999 && month === 12;
+}
+
+monthInput.addEventListener('change', renderCalendar);
+document.addEventListener('click', event => {
+  const target = event.target as Element;
+  const bubble = target.closest<HTMLElement>('[data-date-bubble]');
+  if (bubble) {
+    calendarDay = bubble.dataset.date ?? localDay(new Date());
+    calendarChat = document.querySelector<HTMLElement>('#workspace')!.dataset.chat!;
+    monthInput.value = calendarDay.slice(0, 7);
+    renderCalendar();
+    calendar.showModal();
+    calendar.querySelector<HTMLButtonElement>('[aria-pressed="true"]')?.focus();
+  } else if (target.closest('[data-calendar-close]') || target === calendar) calendar.close();
+  else if (target.closest('[data-calendar-prev], [data-calendar-next]')) {
+    const [year, month] = monthInput.value.split('-').map(Number);
+    const next = calendarDate(year, month - 1 + (target.closest('[data-calendar-next]') ? 1 : -1), 1);
+    monthInput.value = localDay(next).slice(0, 7);
+    renderCalendar();
+  } else if (target.closest('[data-calendar-latest]')) {
+    calendar.close();
+    void navigate(`/chat/${calendarChat}`);
+  } else {
+    const day = target.closest<HTMLElement>('[data-calendar-date]')?.dataset.calendarDate;
+    if (!day) return;
+    const [year, month, date] = day.split('-').map(Number);
+    // Construct local midnight; using a fixed UTC offset would break DST days.
+    const at = calendarDate(year, month - 1, date).toISOString();
+    calendar.close();
+    void navigate(`/chat/${calendarChat}?${new URLSearchParams({ at })}`);
+  }
+});
+
+let dateBubbleFrame = 0;
+document.addEventListener('scroll', event => {
+  if (!(event.target instanceof Element) || !event.target.matches('[data-scroll-region="messages"]') || dateBubbleFrame) return;
+  dateBubbleFrame = requestAnimationFrame(() => { dateBubbleFrame = 0; updateDateBubble(); });
+}, true);
+
 async function refreshTranscripts(): Promise<void> {
   if (fetchingTranscripts || document.hidden) return;
   const nodes = Array.from(document.querySelectorAll<HTMLElement>('[data-transcription-id]:not([data-transcribe-off])'));
@@ -172,7 +274,7 @@ function revealTarget(): void {
   const target = messageTarget();
   // pushState does not consistently update the CSS :target pseudo-class.
   target?.classList.add('context-target');
-  target?.scrollIntoView({ block: 'center' });
+  target?.scrollIntoView({ block: target.closest<HTMLElement>('[data-scroll-region]')?.dataset.scrollAlign === 'start' ? 'start' : 'center' });
   target?.closest('[data-scroll-region]')?.dispatchEvent(new Event('scroll'));
 }
 
@@ -180,16 +282,12 @@ function initializeScroll(scope: ParentNode = document): void {
   scope.querySelectorAll<HTMLElement>('[data-scroll-region]').forEach(region => {
     if (loaders.has(region)) return;
     const list = region.querySelector<HTMLElement>('[data-scroll-list]');
-    const next = region.querySelector<HTMLAnchorElement>('[data-scroll-next]');
-    const status = region.querySelector<HTMLElement>('[data-scroll-status]');
     if (!list) return;
     const older = region.dataset.scrollDirection === 'older';
     const controller = new AbortController();
-    let busy = false;
-    let failed = false;
     let pinned = false;
     let anchor: { node: HTMLElement; top: number } | undefined;
-    let observer: IntersectionObserver | undefined;
+    const edgeStops: Stop[] = [];
     let resize: ResizeObserver | undefined;
 
     function remember(): void {
@@ -218,7 +316,7 @@ function initializeScroll(scope: ParentNode = document): void {
     }
     if (older) {
       const target = messageTarget();
-      if (target && region.contains(target)) target.scrollIntoView({ block: 'center' });
+      if (target && region.contains(target)) target.scrollIntoView({ block: region.dataset.scrollAlign === 'start' ? 'start' : 'center' });
       else if (region.dataset.scrollStart === 'latest') region.scrollTop = region.scrollHeight;
       remember();
       region.addEventListener('scroll', remember, { signal: controller.signal, passive: true });
@@ -238,13 +336,21 @@ function initializeScroll(scope: ParentNode = document): void {
         resize.observe(region);
       }
     }
-    loaders.set(region, () => { controller.abort(); observer?.disconnect(); resize?.disconnect(); });
-    if (!next || !status || !window.IntersectionObserver) return;
+    loaders.set(region, () => { controller.abort(); edgeStops.forEach(stop => stop()); resize?.disconnect(); });
+    if (!window.IntersectionObserver) return;
     const keys = new Set(Array.from(list.querySelectorAll<HTMLElement>('[data-scroll-key]'), node => node.dataset.scrollKey));
+    region.querySelectorAll<HTMLAnchorElement>('[data-scroll-next], [data-scroll-newer]').forEach(next => {
+    const status = next.parentElement?.querySelector<HTMLElement>('[data-scroll-status]');
+    if (!status) return;
+    const newer = next.hasAttribute('data-scroll-newer');
+    const prepend = older && !newer;
+    let busy = false;
+    let failed = false;
+    let observer: IntersectionObserver;
     function nearEdge(): boolean {
       const bounds = next!.getBoundingClientRect();
       const viewport = region.getBoundingClientRect();
-      return older ? bounds.bottom >= viewport.top - 300 && bounds.top <= viewport.bottom
+      return prepend ? bounds.bottom >= viewport.top - 300 && bounds.top <= viewport.bottom
         : bounds.top <= viewport.bottom + 300 && bounds.bottom >= viewport.top;
     }
     async function load(): Promise<void> {
@@ -254,7 +360,7 @@ function initializeScroll(scope: ParentNode = document): void {
       change(() => {
         next!.setAttribute('aria-disabled', 'true');
         list!.setAttribute('aria-busy', 'true');
-        status!.textContent = older ? 'Loading older messages…' : 'Loading more…';
+        status!.textContent = prepend ? 'Loading older messages…' : newer ? 'Loading newer messages…' : 'Loading more…';
       });
       try {
         const response = await fetch(next!.href, { signal: controller.signal, credentials: 'same-origin' });
@@ -268,27 +374,28 @@ function initializeScroll(scope: ParentNode = document): void {
           else keys.add(node.dataset.scrollKey);
         });
         change(() => {
-          if (older) {
+          if (prepend) {
             list!.prepend(...incoming.childNodes);
           } else list!.append(...incoming.childNodes);
           localizeTimes(region);
-          const following = incomingRegion!.querySelector<HTMLAnchorElement>('[data-scroll-next]');
+          const following = incomingRegion!.querySelector<HTMLAnchorElement>(newer ? '[data-scroll-newer]' : '[data-scroll-next]');
           if (following) {
             next!.href = following.getAttribute('href')!;
             status!.textContent = '';
           } else {
             next!.removeAttribute('href');
             next!.hidden = true;
-            status!.textContent = older ? 'Beginning of conversation.' : 'All items loaded.';
+            status!.textContent = prepend ? 'Beginning of conversation.' : newer ? 'Latest message.' : 'All items loaded.';
             observer!.disconnect();
           }
         });
         updateSelection();
         scheduleAvatarRefresh();
+        updateDateBubble();
       } catch {
         if (controller.signal.aborted) return;
         failed = true;
-        change(() => { status!.textContent = older ? 'Could not load history. Select Load older messages to retry.' : 'Could not load more. Select Load more to retry.'; });
+        change(() => { status!.textContent = 'Could not load messages. Select the link to retry.'; });
       } finally {
         busy = false;
         next!.removeAttribute('aria-disabled');
@@ -301,8 +408,10 @@ function initializeScroll(scope: ParentNode = document): void {
     observer = new IntersectionObserver(entries => {
       if (entries.some(entry => entry.isIntersecting) && !failed) void load();
     }, { root: region, rootMargin: '300px' });
+    edgeStops.push(() => observer.disconnect());
     observer.observe(next);
     next.addEventListener('click', event => { event.preventDefault(); void load(); }, { signal: controller.signal });
+    });
   });
 }
 
@@ -361,6 +470,7 @@ async function navigate(url: string, push = true): Promise<void> {
     const nextScroll = workspace.querySelector<HTMLElement>('[data-scroll-viewport]');
     if (nextScroll && nextScroll.dataset.scrollDirection !== 'older') nextScroll.scrollTop = positions.get(currentUrl) ?? 0;
     revealTarget();
+    updateDateBubble();
     workspace.focus({ preventScroll: true });
   } catch {
     if (!controller.signal.aborted) {
@@ -415,6 +525,7 @@ themeButton.addEventListener('click', () => {
 localizeTimes();
 initializeScroll();
 revealTarget();
+updateDateBubble();
 document.querySelectorAll<HTMLImageElement>('[data-avatar-image]').forEach(image => {
   if (image.complete && image.naturalWidth === 0) failedAvatar(image);
 });

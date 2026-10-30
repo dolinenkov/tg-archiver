@@ -1462,3 +1462,24 @@ th {
 .transcript .body { margin-top: 8px; }
 .search-transcript { border-left: 2px solid var(--accent); padding-left: 12px; margin-top: 12px; }
 .search-transcript > strong { font-size: 10px; color: var(--accent); }
+
+.conversation-body { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.conversation-body .conversation-scroll { scroll-padding-top: 58px; }
+.date-bubble { position: absolute; z-index: 3; top: 10px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 9px; border: 1px solid var(--line); border-radius: 24px; padding: 8px 15px; background: var(--date-bg); color: var(--date-text); box-shadow: var(--shadow); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.date-bubble[hidden] { display: none; }
+.date-bubble:hover { filter: brightness(.96); }
+.date-bubble:focus-visible, .calendar-days button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.history-calendar { width: min(360px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; padding: 20px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); color: var(--text); box-shadow: 0 20px 70px #0004; }
+.history-calendar::backdrop { background: #10192266; backdrop-filter: blur(3px); }
+.history-calendar header, .calendar-month { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.history-calendar h2 { margin: 0; font-size: 17px; }
+.calendar-month { margin: 15px 0; }
+.calendar-month input { min-width: 0; max-width: 210px; border: 0; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; font-weight: 600; padding: 7px; border-radius: 8px; }
+.calendar-weekdays, .calendar-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; text-align: center; }
+.calendar-weekdays { color: var(--muted); font-size: 11px; margin-bottom: 8px; }
+.calendar-days button { aspect-ratio: 1; border: 0; border-radius: 50%; background: transparent; color: var(--text); cursor: pointer; font: inherit; font-size: 13px; }
+.calendar-days button:hover { background: var(--line); }
+.calendar-days button[aria-current=date] { box-shadow: inset 0 0 0 1px var(--accent); }
+.calendar-days button[aria-pressed=true] { background: var(--accent); color: white; }
+.calendar-help { color: var(--muted); font-size: 11px; line-height: 1.6; margin: 16px 0; }
+.history-calendar > .secondary-button { width: 100%; }

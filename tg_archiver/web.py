@@ -69,6 +69,7 @@ def initials(title):
 
 
 TEMPLATES.filters.update(display_date=display_date, short_date=short_date)
+TEMPLATES.filters['retry_time'] = lambda value: datetime.fromtimestamp(value, timezone.utc).isoformat()
 TEMPLATES.globals.update(initials=initials, message_text=message_text, fallback=fallback,
                          image_types=IMAGE_TYPES, video_types=VIDEO_TYPES, audio_types=AUDIO_TYPES)
 
@@ -194,16 +195,44 @@ async def render_messages(session, records, expanded=None, data_dir=None, transc
 async def chat(request):
     chat_id = int(request.match_info["chat_id"])
     offset = integer(request.query.get("offset"))
+    at = request.query.get("at")
+    target_id, jump_notice = None, ""
+    if at is not None:
+        try:
+            instant = datetime.fromisoformat(at)
+            if instant.tzinfo is None:
+                raise ValueError()
+            at = instant.astimezone(timezone.utc).isoformat()
+        except (ValueError, OverflowError):
+            raise web.HTTPBadRequest(text="Date navigation requires a timestamp with a timezone") from None
     async with request.app["db"].session() as session:
         current = await session.get(Chat, chat_id)
         if not current:
             raise web.HTTPNotFound()
+        if at is not None:
+            target = await session.scalar(select(Message).where(Message.chat_id == chat_id, Message.sent_at >= at)
+                .order_by(Message.sent_at, Message.telegram_id).limit(1))
+            if target is None:
+                target = await session.scalar(select(Message).where(Message.chat_id == chat_id)
+                    .order_by(Message.sent_at.desc(), Message.telegram_id.desc()).limit(1))
+                if target:
+                    jump_notice = "No messages on or after this date. Showing the most recent message."
+            if target:
+                target_id = target.telegram_id
+                newer_count = await session.scalar(select(func.count()).select_from(Message).where(
+                    Message.chat_id == chat_id, (Message.sent_at > target.sent_at) |
+                    ((Message.sent_at == target.sent_at) & (Message.telegram_id >= target.telegram_id))))
+                # Keep a full page after the target, so a jump never becomes a
+                # dead-end context view. Both edges continue loading normally.
+                offset = max(0, newer_count - 50)
         records = (await session.scalars(select(Message).where(Message.chat_id == chat_id)
                    .order_by(Message.sent_at.desc(), Message.telegram_id.desc()).offset(offset).limit(51))).all()
         messages = await render_messages(session, reversed(records[:50]), data_dir=request.app["config"].data_dir,
                                          transcription_enabled=request.app["config"].transcribe_audio)
     return await render_page(request, current.title, "conversation.html", "chat", current=current,
-                             messages=messages, footer=scroll_footer(f"/chat/{chat_id}", {}, offset, len(records) > 50, older=True))
+                             messages=messages, target_id=target_id, jump_notice=jump_notice,
+                             newer_footer=Markup(f'<div class="scroll-footer"><a data-scroll-newer href="/chat/{chat_id}?offset={max(0, offset - 50)}">Load newer messages</a><p data-scroll-status role="status" aria-live="polite"></p></div>') if offset else Markup(""),
+                             footer=scroll_footer(f"/chat/{chat_id}", {}, offset, len(records) > 50, older=True))
 
 
 async def message(request):

@@ -5,12 +5,17 @@
   <div class="conversation-heading"><h1>{{ current.title }}</h1><p>{{ 'Private conversation' if current.id > 0 else 'Group / channel' }} <span>·</span> Archived history</p></div></a>
   <a class="icon-button" href="/search?chat={{ current.id }}" data-nav aria-label="Search this conversation" title="Search this conversation">{{ icon('search') }}</a>
 </header>
-<div class="conversation-scroll" data-scroll-region="messages" data-scroll-viewport data-scroll-direction="older" {% if view == 'chat' %}data-scroll-start="latest"{% else %}data-scroll-target="m{{ target_id }}"{% endif %}>
+<div class="conversation-body">
+<button type="button" class="date-bubble" data-date-bubble aria-label="Jump to date" aria-haspopup="dialog" aria-controls="history-calendar" hidden><span data-date-hint>Jump to date</span><span aria-hidden="true">⌄</span></button>
+<div class="conversation-scroll" data-scroll-region="messages" data-scroll-viewport data-scroll-direction="older" {% if target_id %}data-scroll-target="m{{ target_id }}"{% if view == 'chat' %} data-scroll-align="start"{% endif %}{% else %}data-scroll-start="latest"{% endif %}>
   <div class="conversation-intro"><span>{{ 'MESSAGE CONTEXT' if view == 'message' else 'CONVERSATION HISTORY' }}</span><span>Chronological · <span data-browser-zone>UTC</span></span></div>
   {% if current.migrated_to %}<p class="notice">This chat migrated to <a href="/chat/{{ current.migrated_to }}" data-nav>{{ current.migrated_to }}</a>.</p>{% endif %}
   {% if view == 'message' %}<p class="context-link"><a href="/chat/{{ current.id }}" data-nav>← Back to conversation</a></p>{% endif %}
+  {% if jump_notice %}<p class="notice">{{ jump_notice }}</p>{% endif %}
   {{ footer }}
   <div class="message-list" data-scroll-list>{{ messages }}</div>
+  {{ newer_footer }}
   {% if not messages %}<div class="conversation-empty">{{ icon('chats', 40) }}<h2>No messages archived yet</h2><p>Captured messages will appear here.</p></div>{% endif %}
+</div>
 </div>
 <footer class="conversation-footer">{{ icon('lock', 15) }}<span>Read-only archive</span><span class="footer-detail">Your history stays here, even when messages disappear.</span></footer>

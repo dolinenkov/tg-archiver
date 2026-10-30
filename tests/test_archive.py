@@ -275,6 +275,29 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(item.retry_at, datetime.now(timezone.utc).timestamp())
             self.assertEqual(target.read_bytes(), b"123")
 
+    async def test_missing_attachment_is_scheduled_and_shown(self):
+        await save_message(self.db, self.config, self.message("photo", media=self.photo()))
+        collector = Collector.__new__(Collector)
+        collector.db, collector.config = self.db, self.config
+        collector.wait_api = AsyncMock()
+        collector.client = SimpleNamespace(get_entity=AsyncMock(return_value=types.User(id=42)),
+                                           get_messages=AsyncMock(return_value=None), is_connected=lambda: False)
+        collector.fatal = None
+        async with self.db.session() as session:
+            item = await session.scalar(select(Attachment))
+        await collector.download(item)
+        async with self.db.session() as session:
+            item = await session.get(Attachment, item.id)
+            self.assertEqual(item.state, 'error')
+            self.assertEqual(item.attempts, 1)
+            self.assertGreater(item.retry_at, datetime.now(timezone.utc).timestamp() + 3500)
+        async with TestClient(TestServer(make_app(self.db, self.config, collector))) as client:
+            body = await (await client.get('/chat/42')).text()
+            self.assertIn('Retry scheduled at', body)
+            self.assertIn('data-local-time', body)
+            status = await (await client.get('/status')).text()
+            self.assertIn('Retry scheduled at', status)
+
     async def test_download_preserves_extensions_in_source_chat_folder(self):
         collector = Collector.__new__(Collector)
         collector.db, collector.config = self.db, self.config

@@ -41,5 +41,13 @@
   </div>
   <dialog class="photo-viewer" aria-label="Profile photo viewer"><button class="photo-close" type="button" data-photo-close aria-label="Close photo">×</button><button class="photo-prev" type="button" data-photo-prev aria-label="Previous photo">‹</button><figure><img alt=""><figcaption></figcaption></figure><button class="photo-next" type="button" data-photo-next aria-label="Next photo">›</button></dialog>
   <div class="navigation-error" role="alert" hidden></div>
+  <dialog id="history-calendar" class="history-calendar" aria-labelledby="calendar-title">
+    <header><h2 id="calendar-title">Jump to date</h2><button type="button" class="icon-button" data-calendar-close aria-label="Close calendar">×</button></header>
+    <div class="calendar-month"><button type="button" class="icon-button" data-calendar-prev aria-label="Previous month">‹</button><input type="month" data-calendar-month aria-label="Choose month and year" min="0001-01" max="9999-12"><button type="button" class="icon-button" data-calendar-next aria-label="Next month">›</button></div>
+    <div class="calendar-weekdays" data-calendar-weekdays aria-hidden="true"></div>
+    <div class="calendar-days" data-calendar-days role="group" aria-label="Choose a day"></div>
+    <p class="calendar-help">Your browser's timezone. Days without messages jump to the next archived message.</p>
+    <button type="button" class="secondary-button" data-calendar-latest>Go to latest message</button>
+  </dialog>
 </body>
 </html>
