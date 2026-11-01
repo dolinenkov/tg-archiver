@@ -1,7 +1,10 @@
+import asyncio
+from collections import Counter
 from datetime import datetime, timezone
 from html import escape
 from itertools import groupby
 import json
+import os
 from pathlib import Path
 import re
 from urllib.parse import urlencode
@@ -317,17 +320,61 @@ async def attachment(request):
 
 
 
+DISK_CATEGORIES = {
+    "photos": "Pictures", "videos": "Videos", "voice": "Voice messages",
+    "video_notes": "Video messages", "audio": "Audio", "stickers": "Stickers and animations",
+    "files": "Files",
+}
+
+
+def disk_usage(data_dir, attachments):
+    """Count file sizes once, without following links outside the archive."""
+    categories = {str(Path("media") / path): category for path, category in attachments if path}
+    sizes = Counter()
+    incomplete = False
+
+    def onerror(error):
+        nonlocal incomplete
+        incomplete = True
+
+    for root, dirs, files in os.walk(data_dir, followlinks=False, onerror=onerror):
+        dirs[:] = [name for name in dirs if not (Path(root) / name).is_symlink()]
+        for name in files:
+            path = Path(root) / name
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                category = categories.get(str(path.relative_to(data_dir)))
+                sizes[category if category in DISK_CATEGORIES else "other"] += path.stat().st_size
+            except OSError:
+                incomplete = True
+    return sizes, incomplete
+
+
+def format_bytes(size):
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
+        if size < 1024 or unit == "PiB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{size} B"
+        size /= 1024
+
+
 async def status(request):
     async with request.app["db"].session() as session:
         settings = (await session.scalars(select(Setting).order_by(Setting.key))).all()
         counts = (await session.execute(select(Attachment.state, func.count()).group_by(Attachment.state))).all()
+        attachment_paths = (await session.execute(select(Attachment.path, Attachment.category).where(Attachment.path.is_not(None)))).all()
         failures = (await session.scalars(select(Attachment).where(Attachment.error != "").limit(50))).all()
         chats_with_errors = (await session.scalars(select(Chat).where(Chat.error != ""))).all()
         chat_progress = (await session.scalars(select(Chat).order_by(Chat.title))).all()
         transcription_counts = (await session.execute(select(Transcription.state, func.count()).group_by(Transcription.state))).all()
         retry_setting = next((s for s in settings if s.key == 'transcription_retry_at'), None)
         transcription_retry_at = datetime.fromtimestamp(float(retry_setting.value), timezone.utc).isoformat() if retry_setting else None
+    sizes, disk_usage_incomplete = await asyncio.to_thread(disk_usage, request.app["config"].data_dir, attachment_paths)
+    disk_usage_rows = [(label, format_bytes(sizes.get(category, 0))) for category, label in DISK_CATEGORIES.items()]
+    disk_usage_rows.append(("Other archive files", format_bytes(sizes.get("other", 0))))
     return await render_page(request, "Status", "status.html", "status", fatal=request.app["collector"].fatal,
+                             disk_usage_total=format_bytes(sum(sizes.values())), disk_usage_rows=disk_usage_rows,
+                             disk_usage_incomplete=disk_usage_incomplete,
                              transcription_counts=transcription_counts, transcription_enabled=request.app["config"].transcribe_audio,
                              transcription_retry_at=transcription_retry_at,
                              settings=settings, counts=counts, failures=failures,

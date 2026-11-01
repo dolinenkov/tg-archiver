@@ -39,6 +39,26 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
                              message=body, edit_date=self.date + timedelta(seconds=edited) if edited else None,
                              media=media)
 
+    async def test_status_disk_usage_counts_existing_files_by_category(self):
+        media = self.config.data_dir / "media" / "42"
+        media.mkdir(parents=True)
+        (media / "photo.jpg").write_bytes(b"x" * 1024)
+        (media / "video.mp4").write_bytes(b"x" * 2048)
+        async with self.db.write() as session:
+            for key, category, path in [("p", "photos", "42/photo.jpg"),
+                                        ("v", "videos", "42/video.mp4"),
+                                        ("missing", "voice", "42/missing.ogg")]:
+                session.add(Attachment(media_key=key, category=category, name=key,
+                                       mime="application/octet-stream", size=99999,
+                                       path=path, state="complete"))
+        async with TestClient(TestServer(make_app(self.db, self.config, SimpleNamespace(fatal=None)))) as client:
+            body = await (await client.get("/status")).text()
+            self.assertIn("Disk usage", body)
+            self.assertIn("<dt>Pictures</dt><dd>1.0 KiB</dd>", body)
+            self.assertIn("<dt>Videos</dt><dd>2.0 KiB</dd>", body)
+            self.assertIn("<dt>Voice messages</dt><dd>0 B</dd>", body)
+            self.assertIn("Other archive files", body)
+
     async def test_versions_replay_order_and_deletion(self):
         await save_message(self.db, self.config, self.message("original"))
         await save_message(self.db, self.config, self.message("изменено", 20), live=True)

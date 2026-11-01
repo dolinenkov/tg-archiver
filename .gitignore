@@ -226,3 +226,7 @@ data/
 node_modules/
 
 config.toml
+
+# Graphify output
+/graphify-out/
+.idea/
