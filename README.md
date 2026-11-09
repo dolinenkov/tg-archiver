@@ -96,7 +96,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-Compose uses `ghcr.io/dolinenkov/tg-archiver:latest`. The GitHub Actions workflow builds and publishes this image after successful builds on `master`. After the first publication, make the package public in GitHub Packages if other users should pull it without signing in. For a local build instead, replace the `image` line in Compose with `build: .` and run `docker compose build`.
+Compose uses `ghcr.io/dolinenkov/tg-archiver:latest`. The image supports Linux amd64 and arm64, including Docker on Apple silicon. The GitHub Actions workflow builds and publishes it after successful builds on `master`. After the first publication, make the package public in GitHub Packages if other users should pull it without signing in. For a local build instead, replace the `image` line in Compose with `build: .` and run `docker compose build`.
 
 List chat IDs while the service is stopped:
 
