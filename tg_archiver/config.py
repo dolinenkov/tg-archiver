@@ -14,6 +14,9 @@ class Config:
     data_dir: Path = Path("data")
     host: str = "127.0.0.1"
     port: int = 8080
+    mcp_enabled: bool = False
+    mcp_host: str = "127.0.0.1"
+    mcp_port: int = 8081
     discovery_seconds: int = 3600
     reconcile_seconds: int = 86400
     reconcile_days: int = 7
@@ -38,7 +41,7 @@ class Config:
 
 def load(path: Path) -> Config:
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    if set(raw) - {"archive", "media", "chats"}:
+    if set(raw) - {"archive", "media", "chats", "mcp"}:
         raise ValueError("Unknown configuration section")
     archive = raw.get("archive", {})
     if not isinstance(archive, dict) or not isinstance(raw.get("chats", {}), dict):
@@ -47,6 +50,16 @@ def load(path: Path) -> Config:
     if set(archive) - fields:
         raise ValueError("Unknown archive setting")
     config = Config(**archive)
+    mcp = raw.get("mcp", {})
+    if not isinstance(mcp, dict) or set(mcp) - {"enabled", "host", "port"}:
+        raise ValueError("Invalid MCP configuration")
+    config.mcp_enabled = mcp.get("enabled", False)
+    config.mcp_host = mcp.get("host", "127.0.0.1")
+    config.mcp_port = mcp.get("port", 8081)
+    if type(config.mcp_enabled) is not bool or not isinstance(config.mcp_host, str) or not config.mcp_host:
+        raise ValueError("Invalid MCP configuration")
+    if type(config.mcp_port) is not int or not 1 <= config.mcp_port <= 65535:
+        raise ValueError("Invalid MCP port")
     if not isinstance(config.data_dir, str | Path):
         raise ValueError("data_dir must be a path string")
     config.data_dir = (path.resolve().parent / config.data_dir).resolve()

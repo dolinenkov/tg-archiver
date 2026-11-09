@@ -35,6 +35,21 @@ tg-archiver run
 
 Pass `--config /path/to/config.toml` to any command. Paths in configuration are relative to that configuration file. On Windows, forward slashes work in TOML paths. Stop the application before running `login`, `chats`, or `retry`; a file lock prevents concurrent ownership of the session and data directory.
 
+## MCP access
+
+To let an MCP client search the running archive, enable the separate Streamable HTTP listener in `config.toml`:
+
+```toml
+[mcp]
+enabled = true
+host = "127.0.0.1"
+port = 8081
+```
+
+Restart `tg-archiver run` and configure the client to use `http://127.0.0.1:8081/mcp`. The `find_chats`, `search_messages`, and `list_attachments` tools support pagination; search uses SQLite FTS5 expressions, including quoted phrases, over captured revisions and transcripts. `export_attachments` writes a ZIP of available files for a chat and selected categories to `data/exports` on the server, with a JSON manifest listing missing files. The returned path is local to the server; it is not necessarily accessible to a remote client. Exports are retained until manually removed.
+
+The MCP listener has no authentication and exposes private archive content and local media paths to clients. Keep it on loopback unless access is protected by a trusted authenticated network boundary. Connecting an LLM client may send archive content to its model provider.
+
 ## Sign in and import from the browser
 
 Start `tg-archiver run`, open the archive, and select **Settings** in the left navigation. API credentials still come from `TG_API_ID` and `TG_API_HASH` on the server.

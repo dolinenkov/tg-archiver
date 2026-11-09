@@ -474,6 +474,53 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
             response = await client.get(f'/attachment/{item_id}?inline=1')
             self.assertEqual(response.status, 404)
 
+    async def test_inline_media_uses_safe_mime_and_supports_ranges(self):
+        media = self.config.data_dir / 'media' / '42'
+        media.mkdir(parents=True)
+        (media / 'file.bin').write_bytes(b'0123456789')
+        async with self.db.write() as session:
+            items = [Attachment(media_key=name, category='files', name=name, mime=mime,
+                                size=10, state='complete', path='42/file.bin')
+                     for name, mime in [('clip.mp4', 'application/octet-stream'),
+                                        ('unsafe.html', 'application/octet-stream'),
+                                        ('audio.ogg', 'audio/ogg')]]
+            session.add_all(items)
+            await session.flush()
+            ids = [item.id for item in items]
+        async with TestClient(TestServer(make_app(self.db, self.config, SimpleNamespace(fatal=None)))) as client:
+            response = await client.get(f'/attachment/{ids[0]}?inline=1', headers={'Range': 'bytes=2-4'})
+            self.assertEqual(response.status, 206)
+            self.assertEqual(response.content_type, 'video/mp4')
+            self.assertEqual(await response.read(), b'234')
+            response = await client.get(f'/attachment/{ids[1]}?inline=1')
+            self.assertEqual(response.content_type, 'application/octet-stream')
+            self.assertTrue(response.headers['Content-Disposition'].startswith('attachment'))
+            response = await client.get(f'/attachment/{ids[2]}?inline=1')
+            self.assertEqual(response.content_type, 'audio/ogg')
+
+    async def test_reactions_are_shown_and_updated_without_message_edits(self):
+        from tg_archiver.archive import save_reaction_update
+        from tg_archiver.db import MessageReactions
+        reaction = types.MessageReactions(results=[types.ReactionCount(reaction=types.ReactionEmoji('👍'), count=3, chosen_order=0)])
+        message = self.message('hello')
+        message.reactions = reaction
+        await save_message(self.db, self.config, message)
+        async with TestClient(TestServer(make_app(self.db, self.config, SimpleNamespace(fatal=None)))) as client:
+            body = await (await client.get('/chat/42')).text()
+            self.assertIn('👍', body)
+            self.assertIn('👍: 3 reactions', body)
+            updated = types.MessageReactions(results=[types.ReactionCount(reaction=types.ReactionEmoji('❤️'), count=2)])
+            await save_reaction_update(self.db, self.config, types.UpdateMessageReactions(peer=types.PeerUser(42), msg_id=1, reactions=updated))
+            body = await (await client.get('/chat/42')).text()
+            self.assertIn('❤️: 2 reactions', body)
+            self.assertNotIn('👍: 3 reactions', body)
+            await save_reaction_update(self.db, self.config, types.UpdateMessageReactions(peer=types.PeerUser(42), msg_id=1, reactions=types.MessageReactions(results=[])))
+            body = await (await client.get('/chat/42')).text()
+            self.assertNotIn('class="message-reactions"', body)
+        async with self.db.session() as session:
+            self.assertEqual(await session.scalar(select(func.count()).select_from(Version)), 1)
+            self.assertIsNotNone(await session.get(MessageReactions, 1))
+
 
     async def test_scroll_continuations_keep_search_filters_and_stop_at_end(self):
         for index in range(1, 54):

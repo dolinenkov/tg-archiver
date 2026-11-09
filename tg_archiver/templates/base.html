@@ -35,11 +35,19 @@
       </div>
       <footer class="sidebar-footer"><span class="connection-dot {{ 'connected' if connected else '' }}"></span><span>{{ 'Connected to Telegram' if connected else 'Telegram disconnected' }}</span>{{ icon('lock', 13) }}</footer>
     </aside>
-    <main class="workspace" id="workspace" tabindex="-1" data-view="{{ view }}" data-chat="{{ current_chat_id or '' }}">
-      {% include content_template %}
-    </main>
+    {% include 'workspace.html' %}
   </div>
   <dialog class="photo-viewer" aria-label="Profile photo viewer"><button class="photo-close" type="button" data-photo-close aria-label="Close photo">×</button><button class="photo-prev" type="button" data-photo-prev aria-label="Previous photo">‹</button><figure><img alt=""><figcaption></figcaption></figure><button class="photo-next" type="button" data-photo-next aria-label="Next photo">›</button></dialog>
+  <dialog class="media-viewer" aria-label="Media viewer"><button type="button" class="media-close" data-media-close aria-label="Close media viewer">×</button><figure><img hidden alt=""><video hidden controls playsinline></video><figcaption></figcaption><label data-viewer-speed hidden>Speed <select aria-label="Video playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label></figure></dialog>
+  <section class="export-toolbar" aria-label="Selected messages" hidden>
+    <strong data-selection-count></strong>
+    <label><input type="checkbox" data-export-metadata checked> Author and timestamp</label>
+    <button type="button" data-export="markdown">Copy Markdown</button>
+    <button type="button" data-export="rich">Copy rich text</button>
+    <button type="button" data-export="download">Download .md</button>
+    <button type="button" data-clear-selection>Clear selection</button>
+    <span role="status" data-export-status></span>
+  </section>
   <div class="navigation-error" role="alert" hidden></div>
   <dialog id="history-calendar" class="history-calendar" aria-labelledby="calendar-title">
     <header><h2 id="calendar-title">Jump to date</h2><button type="button" class="icon-button" data-calendar-close aria-label="Close calendar">×</button></header>

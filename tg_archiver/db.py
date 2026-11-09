@@ -77,7 +77,8 @@ class ProfilePhoto(Base):
 
 class Message(Base):
     __tablename__ = "messages"
-    __table_args__ = (UniqueConstraint("chat_id", "telegram_id"),)
+    __table_args__ = (UniqueConstraint("chat_id", "telegram_id"),
+                      Index("ix_messages_chat_timeline", "chat_id", "sent_at", "telegram_id"))
     id: Mapped[int] = mapped_column(primary_key=True)
     chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id"), index=True)
     telegram_id: Mapped[int] = mapped_column()
@@ -88,6 +89,12 @@ class Message(Base):
     latest_id: Mapped[int | None] = mapped_column()
     latest_source_at: Mapped[str] = mapped_column(default="")
     deleted_at: Mapped[str | None] = mapped_column()
+
+
+class MessageReactions(Base):
+    __tablename__ = "message_reactions"
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"), primary_key=True)
+    raw: Mapped[str] = mapped_column(Text)
 
 
 class Version(Base):
@@ -162,6 +169,7 @@ class Database:
         async with self.engine.begin() as connection:
             await connection.exec_driver_sql("PRAGMA journal_mode=WAL")
             await connection.run_sync(Base.metadata.create_all)
+            await connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_chat_timeline ON messages(chat_id,sent_at,telegram_id)")
             await connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_version_attachments_attachment_id ON version_attachments(attachment_id)")
             await connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_transcriptions_source ON transcriptions(source_chat_id,source_message_id)")
             await connection.exec_driver_sql("CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(body, tokenize='unicode61')")

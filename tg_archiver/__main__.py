@@ -74,6 +74,16 @@ async def application(config):
         raise
     app = make_app(db, config, collector)
 
+    async def mcp_lifecycle(app):
+        from .mcp import make_mcp_app
+        runner = web.AppRunner(make_mcp_app(db, config), access_log=None)
+        await runner.setup()
+        try:
+            await web.TCPSite(runner, config.mcp_host, config.mcp_port).start()
+            yield
+        finally:
+            await runner.cleanup()
+
     async def lifecycle(app):
         await collector.start()
         try:
@@ -83,6 +93,8 @@ async def application(config):
             await db.close()
 
     app.cleanup_ctx.append(lifecycle)
+    if config.mcp_enabled:
+        app.cleanup_ctx.append(mcp_lifecycle)
     return app
 
 

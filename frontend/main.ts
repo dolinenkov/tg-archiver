@@ -1,4 +1,5 @@
 import './style.css';
+import './export';
 
 type Stop = () => void;
 const loaders = new Map<HTMLElement, Stop>();
@@ -8,6 +9,50 @@ let currentUrl = location.href;
 let avatarRefresh: number | undefined;
 let fetchingAvatars = false;
 let fetchingTranscripts = false;
+
+const mediaViewer = document.querySelector<HTMLDialogElement>('.media-viewer')!;
+const viewerImage = mediaViewer.querySelector('img')!;
+const viewerVideo = mediaViewer.querySelector('video')!;
+const viewerSpeed = mediaViewer.querySelector<HTMLElement>('[data-viewer-speed]')!;
+const viewerSelect = viewerSpeed.querySelector('select')!;
+
+document.addEventListener('click', event => {
+  const target = event.target as Element;
+  const link = target.closest<HTMLAnchorElement>('[data-media-view]');
+  if (link && event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+    event.preventDefault();
+    const video = link.dataset.mediaView === 'video';
+    viewerImage.hidden = video;
+    viewerVideo.hidden = !video;
+    viewerSpeed.hidden = !video;
+    const name = link.querySelector('img')?.alt ?? link.getAttribute('aria-label') ?? '';
+    mediaViewer.querySelector('figcaption')!.textContent = name;
+    if (video) {
+      viewerVideo.src = link.href;
+      viewerVideo.playbackRate = Number(viewerSelect.value);
+    } else {
+      viewerImage.src = link.href;
+      viewerImage.alt = name;
+    }
+    mediaViewer.showModal();
+    if (video) void viewerVideo.play().catch(() => {});
+  } else if (target.closest('[data-media-close]') || target === mediaViewer) mediaViewer.close();
+});
+mediaViewer.addEventListener('close', () => {
+  viewerVideo.pause();
+  viewerVideo.removeAttribute('src');
+  viewerVideo.load();
+  viewerImage.removeAttribute('src');
+});
+document.addEventListener('change', event => {
+  const select = event.target;
+  if (!(select instanceof HTMLSelectElement)) return;
+  if (select === viewerSelect) viewerVideo.playbackRate = Number(select.value);
+  else if (select.matches('[data-media-speed]')) {
+    const audio = select.closest('.audio-player')?.querySelector('audio');
+    if (audio) audio.playbackRate = Number(select.value);
+  }
+});
 
 function localDay(date: Date): string {
   return `${String(date.getFullYear()).padStart(4, '0')}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -363,7 +408,7 @@ function initializeScroll(scope: ParentNode = document): void {
         status!.textContent = prepend ? 'Loading older messages…' : newer ? 'Loading newer messages…' : 'Loading more…';
       });
       try {
-        const response = await fetch(next!.href, { signal: controller.signal, credentials: 'same-origin' });
+        const response = await fetch(next!.href, { signal: controller.signal, credentials: 'same-origin', headers: { 'X-Archive-Fragment': 'workspace' } });
         if (!response.ok) throw new Error('Request failed');
         const page = new DOMParser().parseFromString(await response.text(), 'text/html');
         const incomingRegion = page.querySelector<HTMLElement>(`[data-scroll-region="${region.dataset.scrollRegion}"]`);
@@ -448,7 +493,7 @@ async function navigate(url: string, push = true): Promise<void> {
   workspace.setAttribute('aria-busy', 'true');
   error.hidden = true;
   try {
-    const response = await fetch(destination.href, { signal: controller.signal, credentials: 'same-origin' });
+    const response = await fetch(destination.href, { signal: controller.signal, credentials: 'same-origin', headers: { 'X-Archive-Fragment': 'workspace' } });
     const page = new DOMParser().parseFromString(await response.text(), 'text/html');
     const incoming = page.querySelector<HTMLElement>('#workspace');
     // Render validation errors from the search form in their normal application layout.
@@ -460,7 +505,7 @@ async function navigate(url: string, push = true): Promise<void> {
     workspace.replaceChildren(...incoming.childNodes);
     workspace.dataset.view = incoming.dataset.view;
     workspace.dataset.chat = incoming.dataset.chat;
-    document.title = page.title;
+    document.title = incoming.dataset.title ?? page.title;
     if (push) history.pushState(null, '', destination.href);
     currentUrl = destination.href;
     localizeTimes(workspace);

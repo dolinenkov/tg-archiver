@@ -6,7 +6,7 @@ import json
 from sqlalchemy import select, text
 from telethon import types, utils
 
-from .db import Attachment, Chat, Message, Sender, Version, VersionAttachment
+from .db import Attachment, Chat, Message, MessageReactions, Sender, Version, VersionAttachment
 from .profiles import queue_profile
 from .transcription import index_versions, queue_transcription
 
@@ -52,6 +52,28 @@ def media_info(message):
                 size=file.size or 0)
 
 
+async def store_reactions(session, message_id, reactions):
+    raw = json.dumps(reactions, default=json_default, ensure_ascii=False)
+    saved = await session.get(MessageReactions, message_id)
+    if saved:
+        saved.raw = raw
+    else:
+        session.add(MessageReactions(message_id=message_id, raw=raw))
+
+
+async def save_reaction_update(db, config, update):
+    # Saved-message topic updates refer to a different peer namespace.
+    if getattr(update, "saved_peer_id", None):
+        return
+    chat_id = utils.get_peer_id(update.peer)
+    if not config.included(chat_id):
+        return
+    async with db.write() as session:
+        message = await session.scalar(select(Message).where(Message.chat_id == chat_id, Message.telegram_id == update.msg_id))
+        if message:
+            await store_reactions(session, message.id, update.reactions.to_dict())
+
+
 async def save_message(db, config, message, live=False, protected=False):
     chat_id = utils.get_peer_id(message.peer_id)
     if not config.included(chat_id):
@@ -90,6 +112,7 @@ async def save_message(db, config, message, live=False, protected=False):
                             album=str(message.grouped_id) if message.grouped_id else None)
             session.add(saved)
             await session.flush()
+        await store_reactions(session, saved.id, raw_dict.get("reactions"))
         latest = await session.get(Version, saved.latest_id) if saved.latest_id else None
         version = await session.scalar(select(Version).where(Version.message_id == saved.id, Version.fingerprint == fingerprint,
                                                             Version.source_at == source_at))

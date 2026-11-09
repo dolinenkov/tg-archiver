@@ -10,7 +10,8 @@ services:
       - ./data:/app/data
       - ./config.toml:/app/config.toml:ro
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
+      #- "127.0.0.1:8080:8080"
     stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"]

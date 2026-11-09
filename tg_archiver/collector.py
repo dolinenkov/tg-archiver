@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from telethon import TelegramClient, errors, events, types
 
-from .archive import media_info, save_deletions, save_message
+from .archive import media_info, save_deletions, save_message, save_reaction_update
 from .avatars import cached_file, photo_id
 from .config import credentials
 from .db import Attachment, Avatar, Chat, Message, Setting, Version, VersionAttachment, now
@@ -48,12 +48,25 @@ class Collector:
         self.client.add_event_handler(self.on_message, events.MessageEdited())
         self.client.add_event_handler(self.on_delete, events.MessageDeleted())
         self.client.add_event_handler(self.on_transcription, events.Raw(types.UpdateTranscribedAudio))
+        self.client.add_event_handler(self.on_reactions, events.Raw(types.UpdateMessageReactions))
         self.tasks = [asyncio.create_task(self.guard(name, work), name=name) for name, work in [
             ("connection", self.connection), ("history", self.history), ("attachments", self.downloads),
             ("avatars", self.avatars), ("profiles", self.profiles), ("transcriptions", self.transcriptions)]]
 
     async def transcriptions(self):
         await collect_transcriptions(self)
+
+    async def on_reactions(self, update):
+        await self.ready.wait()
+        if self.fatal or not self.verified:
+            return
+        try:
+            await save_reaction_update(self.db, self.config, update)
+        except (SQLAlchemyError, OSError) as error:
+            self.fatal = f"Reaction storage failure ({type(error).__name__}); collection stopped"
+            self.ready.clear()
+            log.error(self.fatal)
+            await self.client.disconnect()
 
     async def on_transcription(self, update):
         await self.ready.wait()
@@ -77,6 +90,7 @@ class Collector:
         self.client.remove_event_handler(self.on_message)
         self.client.remove_event_handler(self.on_delete)
         self.client.remove_event_handler(self.on_transcription)
+        self.client.remove_event_handler(self.on_reactions)
         self.verified = False
         self.ready.clear()
         await self.client.disconnect()

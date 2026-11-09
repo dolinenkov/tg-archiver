@@ -155,7 +155,7 @@ class SetupWebTests(unittest.IsolatedAsyncioTestCase):
         collector.guard = idle
         for _ in range(2):
             await collector.start()
-            self.assertEqual(len(handlers), 4)
+            self.assertEqual(len(handlers), 5)
             await collector.stop()
             self.assertEqual(handlers, [])
 

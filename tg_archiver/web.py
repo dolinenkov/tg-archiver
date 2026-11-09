@@ -1,9 +1,10 @@
 import asyncio
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from html import escape
 from itertools import groupby
 import json
+import mimetypes
 import os
 from pathlib import Path
 import re
@@ -16,12 +17,19 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import OperationalError
 
 from .avatars import cached_file
-from .db import Attachment, Avatar, Chat, Message, Profile, ProfilePhoto, Sender, Setting, Transcription, Version, VersionAttachment
+from .db import Attachment, Avatar, Chat, Message, MessageReactions, Profile, ProfilePhoto, Sender, Setting, Transcription, Version, VersionAttachment
 
 
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 VIDEO_TYPES = {"video/mp4", "video/webm"}
 AUDIO_TYPES = {"audio/ogg", "audio/mpeg", "audio/mp4", "audio/wav", "audio/webm"}
+
+
+def media_type(item):
+    mime = (item.mime or "").lower().split(";", 1)[0].strip()
+    if mime in {"", "application/octet-stream", "binary/octet-stream"}:
+        mime = mimetypes.guess_type(item.name or "")[0] or mime
+    return mime
 TEMPLATES = Environment(loader=PackageLoader("tg_archiver"), autoescape=select_autoescape(["html"]))
 
 
@@ -71,10 +79,37 @@ def initials(title):
     return "".join(word[0] for word in words[:2]).upper() or "?"
 
 
+def reaction_labels(raw):
+    if isinstance(raw, dict):
+        raw = raw.get("results", [])
+    if not isinstance(raw, list):
+        return []
+    result = []
+    for entry in raw:
+        if not isinstance(entry, dict) or not isinstance(entry.get("count"), int) or entry["count"] <= 0:
+            continue
+        reaction = entry.get("reaction", entry)
+        if not isinstance(reaction, dict):
+            continue
+        kind = reaction.get("_", reaction.get("type"))
+        if kind in ("ReactionEmoji", "emoji"):
+            label = reaction.get("emoticon", reaction.get("emoji", ""))
+        elif kind in ("ReactionCustomEmoji", "custom_emoji"):
+            label = "Custom emoji"
+        elif kind in ("ReactionPaid", "paid"):
+            label = "⭐"
+        else:
+            continue
+        if isinstance(label, str) and label:
+            result.append({"label": label, "count": entry["count"], "chosen": entry.get("chosen_order") is not None})
+    return result
+
+
 TEMPLATES.filters.update(display_date=display_date, short_date=short_date)
 TEMPLATES.filters['retry_time'] = lambda value: datetime.fromtimestamp(value, timezone.utc).isoformat()
 TEMPLATES.globals.update(initials=initials, message_text=message_text, fallback=fallback,
-                         image_types=IMAGE_TYPES, video_types=VIDEO_TYPES, audio_types=AUDIO_TYPES)
+                         image_types=IMAGE_TYPES, video_types=VIDEO_TYPES, audio_types=AUDIO_TYPES,
+                         media_type=media_type)
 
 
 @web.middleware
@@ -134,6 +169,15 @@ async def sidebar_data(session, offset=0):
 async def render_page(request, title, content_template, view, status=200, **context):
     offset = integer(request.query.get("offset")) if view == "home" else 0
     current = context.get("current")
+    # In-app conversation navigation keeps the existing sidebar and app shell.
+    if request.headers.get("X-Archive-Fragment") == "workspace" and view in {"chat", "message"}:
+        async with request.app["db"].session() as session:
+            photos = await avatar_versions(session, request.app["config"].data_dir, [current.id])
+        html = TEMPLATES.get_template("workspace.html").render(
+            title=title, content_template=content_template, view=view,
+            current_chat_id=current.id, avatar_versions=photos, **context)
+        return web.Response(text=html, content_type="text/html", status=status,
+                            headers={"Vary": "X-Archive-Fragment"})
     async with request.app["db"].session() as session:
         sidebar_chats, more = await sidebar_data(session, offset)
         chat_count = await session.scalar(select(func.count()).select_from(Chat))
@@ -147,35 +191,54 @@ async def render_page(request, title, content_template, view, status=200, **cont
         current_chat_id=current.id if current else None, sidebar_chats=sidebar_chats,
         sidebar_footer=scroll_footer("/", {}, offset, more), chat_count=chat_count,
         connected=connected, avatar_versions=photos, **context)
-    return web.Response(text=html, content_type="text/html", status=status)
+    return web.Response(text=html, content_type="text/html", status=status,
+                        headers={"Vary": "X-Archive-Fragment"})
 
 
 async def chats(request):
     return await render_page(request, "Chats", "home.html", "home")
 
 
-async def render_message(session, message, expanded=None, account_id=None, photos=None, transcription_enabled=True):
-    versions = (await session.scalars(select(Version).where(Version.message_id == message.id)
-                .order_by(Version.source_at.desc(), Version.id.desc()))).all()
-    versions.sort(key=lambda v: v.id != message.latest_id)
-    sender = await session.get(Sender, message.sender_id) if message.sender_id else None
-    profile = await session.get(Profile, message.sender_id) if message.sender_id and not sender else None
-    attachments = {}
-    for version in versions:
-        attachments[version.id] = (await session.scalars(select(Attachment).join(VersionAttachment)
-                                   .where(VersionAttachment.version_id == version.id))).all()
-    attachment_ids = {item.id for items in attachments.values() for item in items}
-    transcripts = {item.attachment_id: item for item in (await session.scalars(select(Transcription)
-        .where(Transcription.attachment_id.in_(attachment_ids)))).all()}
+def render_message(message, versions, attachments, senders, profiles, saved_reactions,
+                   transcripts, expanded=None, account_id=None, photos=None, transcription_enabled=True):
+    versions = sorted(versions, key=lambda v: v.id != message.latest_id)
+    sender = senders.get(message.sender_id)
+    profile = profiles.get(message.sender_id)
+    if saved_reactions:
+        reactions = json.loads(saved_reactions.raw)
+    else:
+        raw = json.loads(versions[0].raw) if versions else {}
+        reactions = raw.get("export", {}).get("reactions") if raw.get("_") == "TelegramDesktopExport" else raw.get("reactions")
     return TEMPLATES.get_template("message.html").render(
         message=message, versions=versions, version_attachments=attachments, expanded=expanded,
         outgoing=account_id is not None and str(message.sender_id) == account_id,
         sender=sender.name if sender else (profile.name if profile and profile.name else str(message.sender_id or "Service")),
-        avatar_versions=photos or {}, transcripts=transcripts, transcription_enabled=transcription_enabled)
+        avatar_versions=photos or {}, transcripts=transcripts, transcription_enabled=transcription_enabled,
+        reactions=reaction_labels(reactions))
 
 
 async def render_messages(session, records, expanded=None, data_dir=None, transcription_enabled=True):
     records = list(records)
+    # Fetch each related table once per page, rather than once per message/version.
+    message_ids = [m.id for m in records]
+    sender_ids = {m.sender_id for m in records if m.sender_id is not None}
+    versions = defaultdict(list)
+    for version in (await session.scalars(select(Version).where(Version.message_id.in_(message_ids))
+                    .order_by(Version.source_at.desc(), Version.id.desc()))).all():
+        versions[version.message_id].append(version)
+    attachments = defaultdict(list)
+    version_ids = [v.id for items in versions.values() for v in items]
+    for version_id, attachment in (await session.execute(select(VersionAttachment.version_id, Attachment)
+            .join(Attachment, Attachment.id == VersionAttachment.attachment_id)
+            .where(VersionAttachment.version_id.in_(version_ids)))).all():
+        attachments[version_id].append(attachment)
+    attachment_ids = {a.id for items in attachments.values() for a in items}
+    transcripts = {t.attachment_id: t for t in (await session.scalars(select(Transcription)
+                   .where(Transcription.attachment_id.in_(attachment_ids)))).all()}
+    senders = {s.id: s for s in (await session.scalars(select(Sender).where(Sender.id.in_(sender_ids)))).all()}
+    profiles = {p.id: p for p in (await session.scalars(select(Profile).where(Profile.id.in_(sender_ids)))).all()}
+    reactions = {r.message_id: r for r in (await session.scalars(select(MessageReactions)
+                 .where(MessageReactions.message_id.in_(message_ids)))).all()}
     owner = await session.get(Setting, "account_id")
     # Cached paths only; no Telegram requests while rendering a conversation.
     photos = await avatar_versions(session, data_dir, [m.sender_id for m in records if m.sender_id is not None]) if data_dir else {}
@@ -189,7 +252,8 @@ async def render_messages(session, records, expanded=None, data_dir=None, transc
             if date != previous_date:
                 output.append(f'<div class="date-divider" data-message-date="{e(date)}"><span>{e(datetime.fromisoformat(record.sent_at).strftime("%d %B %Y"))}</span></div>')
                 previous_date = date
-            output.append(await render_message(session, record, expanded, owner.value if owner else None, photos, transcription_enabled))
+            output.append(render_message(record, versions[record.id], attachments, senders, profiles, reactions.get(record.id),
+                                         transcripts, expanded, owner.value if owner else None, photos, transcription_enabled))
         if album:
             output.append('</section>')
     return Markup("".join(output))
@@ -309,12 +373,12 @@ async def attachment(request):
     target = (root / item.path).resolve()
     if not target.is_relative_to(root) or not target.is_file():
         raise web.HTTPNotFound()
-    inline_types = {"image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "video/webm", "audio/ogg", "audio/mpeg", "audio/mp4", "audio/wav", "audio/webm"}
-    inline = request.query.get("inline") == "1" and item.mime in inline_types
+    mime = media_type(item)
+    inline = request.query.get("inline") == "1" and mime in IMAGE_TYPES | VIDEO_TYPES | AUDIO_TYPES
     from urllib.parse import quote
     filename = quote(item.name, safe="")
     response = web.FileResponse(target)
-    response.headers["Content-Type"] = item.mime if inline else "application/octet-stream"
+    response.headers["Content-Type"] = mime if inline else "application/octet-stream"
     response.headers["Content-Disposition"] = f"{'inline' if inline else 'attachment'}; filename*=UTF-8''{filename}"
     return response
 
