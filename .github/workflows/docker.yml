@@ -1,4 +1,4 @@
-name: Build Docker image
+name: Build and publish Docker image
 
 on:
   push:
@@ -20,3 +20,29 @@ jobs:
 
       - name: Check application entry point
         run: docker run --rm tg-archiver:ci tg-archiver --help
+
+  publish:
+    if: github.repository == 'dolinenkov/tg-archiver' && github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Build image for GHCR
+        run: |
+          docker build --tag ghcr.io/dolinenkov/tg-archiver:latest \
+            --label org.opencontainers.image.source=https://github.com/dolinenkov/tg-archiver .
+
+      - name: Log in to GHCR
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish image
+        run: docker push ghcr.io/dolinenkov/tg-archiver:latest

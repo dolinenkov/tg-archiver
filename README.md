@@ -80,7 +80,7 @@ JSON is loaded into memory and validated before import. Writes commit in batches
 
 ## Run with Docker Compose
 
-Copy the example configuration to `config.toml`, retaining `data_dir = "data"`. Change **host to `"0.0.0.0"`** so the web server accepts connections through the container interface. Compose publishes port 8080 on host loopback only.
+Copy the example configuration to `config.toml`, retaining `data_dir = "data"`. Change **host to `"0.0.0.0"`** so the web server accepts connections through the container interface. To restrict the unauthenticated web UI to this machine, publish the port as `127.0.0.1:8080:8080` in Compose.
 
 Create `.env` beside `compose.yaml`:
 
@@ -90,11 +90,13 @@ TG_API_HASH=your_api_hash
 ```
 
 ```sh
-docker compose build
+docker compose pull
 docker compose run --rm --no-deps archiver tg-archiver login
 docker compose up -d
 docker compose logs -f
 ```
+
+Compose uses `ghcr.io/dolinenkov/tg-archiver:latest`. The GitHub Actions workflow builds and publishes this image after successful builds on `master`. After the first publication, make the package public in GitHub Packages if other users should pull it without signing in. For a local build instead, replace the `image` line in Compose with `build: .` and run `docker compose build`.
 
 List chat IDs while the service is stopped:
 

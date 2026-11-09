@@ -1,6 +1,7 @@
 services:
   archiver:
-    build: .
+    #build: .
+    image: ghcr.io/dolinenkov/tg-archiver:latest
     restart: unless-stopped
     init: true
     environment:
