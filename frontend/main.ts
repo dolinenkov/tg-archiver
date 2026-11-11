@@ -473,7 +473,7 @@ function updateSelection(): void {
   const view = workspace.dataset.view;
   document.querySelectorAll<HTMLElement>('[data-section]').forEach(link => {
     const section = link.dataset.section;
-    link.classList.toggle('active', section === view || (section === 'chats' && ['home', 'chat', 'message', 'profile'].includes(view ?? '')));
+    link.classList.toggle('active', section === view || (section === document.querySelector<HTMLElement>('.sidebar')?.dataset.sidebarSection && ['home', 'chat', 'message', 'profile'].includes(view ?? '')));
   });
 }
 

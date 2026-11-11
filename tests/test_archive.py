@@ -428,6 +428,28 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     self.assertIn('data-scroll-target="m51"', body)
 
+    async def test_sidebar_separates_private_chats_groups_and_channels(self):
+        async with self.db.write() as session:
+            session.add_all([
+                Chat(id=1, kind="User", title="Private person"),
+                Chat(id=-2, kind="Chat", title="Basic group"),
+                Chat(id=-1000000000003, kind="Channel", title="Super group", is_group=True),
+                Chat(id=-1000000000004, kind="Channel", title="Broadcast channel"),
+            ])
+        async with TestClient(TestServer(make_app(self.db, self.config, SimpleNamespace(fatal=None)))) as client:
+            for path, present, absent in [
+                ("/", ["Private person"], ["Basic group", "Super group", "Broadcast channel"]),
+                ("/groups", ["Basic group", "Super group"], ["Private person", "Broadcast channel"]),
+                ("/channels", ["Broadcast channel"], ["Private person", "Basic group", "Super group"]),
+            ]:
+                body = await (await client.get(path)).text()
+                for title in present:
+                    self.assertIn(title, body)
+                for title in absent:
+                    self.assertNotIn(title, body)
+            body = await (await client.get("/chat/-1000000000003")).text()
+            self.assertIn('data-sidebar-section="groups"', body)
+
     async def test_conversation_order_uses_timestamp_before_message_id(self):
         for message_id, seconds in [(700, 1), (10, 3), (400, 2)]:
             message = self.message(str(message_id), message_id=message_id)

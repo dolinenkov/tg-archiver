@@ -8,4 +8,4 @@
   <a class="welcome-search" href="/search" data-nav>{{ icon('search', 18) }} Search your archive <span>→</span></a>
   <div class="welcome-note">{{ icon('lock', 14) }} Private by default. Preserved for you.</div>
 </section>
-<div class="home-footer"><span>{{ chat_count }} archived {{ 'chat' if chat_count == 1 else 'chats' }}</span><span>Read-only archive</span></div>
+<div class="home-footer"><span>{{ chat_count }} archived {{ section[:-1] if chat_count == 1 else section }}</span><span>Read-only archive</span></div>

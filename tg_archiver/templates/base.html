@@ -15,7 +15,9 @@
     <nav class="rail" aria-label="Main navigation">
       <a class="brand-mark" href="/" data-nav aria-label="Archive home">{{ icon('plane', 26) }}</a>
       <div class="rail-links">
-        <a href="/" data-nav data-section="chats" class="rail-link {{ 'active' if view in ('home', 'chat', 'message', 'profile') else '' }}" aria-label="Chats" title="Chats">{{ icon('chats', 23) }}<span>Chats</span></a>
+        <a href="/" data-section="chats" class="rail-link {{ 'active' if section == 'chats' and view in ('home', 'chat', 'message', 'profile') else '' }}" aria-label="Chats" title="Chats">{{ icon('chats', 23) }}<span>Chats</span></a>
+        <a href="/groups" data-section="groups" class="rail-link {{ 'active' if section == 'groups' and view in ('home', 'chat', 'message', 'profile') else '' }}" aria-label="Groups" title="Groups">{{ icon('groups', 23) }}<span>Groups</span></a>
+        <a href="/channels" data-section="channels" class="rail-link {{ 'active' if section == 'channels' and view in ('home', 'chat', 'message', 'profile') else '' }}" aria-label="Channels" title="Channels">{{ icon('channels', 23) }}<span>Channels</span></a>
         <a href="/search" data-nav data-section="search" class="rail-link {{ 'active' if view == 'search' else '' }}" aria-label="Search archive" title="Search archive">{{ icon('search', 23) }}<span>Search</span></a>
         <a href="/status" data-nav data-section="status" class="rail-link {{ 'active' if view == 'status' else '' }}" aria-label="Collection status" title="Collection status">{{ icon('activity', 23) }}<span>Status</span></a>
         <a href="/settings" data-nav data-section="settings" class="rail-link {{ 'active' if view == 'settings' else '' }}" aria-label="Settings" title="Settings">{{ icon('lock', 23) }}<span>Settings</span></a>
@@ -23,10 +25,10 @@
       <button class="rail-link theme-toggle" type="button" data-theme-toggle aria-label="Toggle dark theme" title="Toggle theme">{{ icon('moon', 23) }}<span>Theme</span></button>
       <span class="rail-avatar" title="Personal archive">A</span>
     </nav>
-    <aside class="sidebar" aria-label="Archived chats">
+    <aside class="sidebar" aria-label="Archived {{ section }}" data-sidebar-section="{{ section }}">
       <header class="sidebar-header"><div class="wordmark">Archive<span class="wordmark-dot"></span></div><span class="personal-label">PERSONAL</span></header>
       <form class="sidebar-search" action="/search" data-nav-form role="search"><label>{{ icon('search', 18) }}<input name="q" aria-label="Search archived messages" placeholder="Search messages" autocomplete="off"></label><button class="sr-only">Search</button></form>
-      <div class="list-heading"><span>ALL CHATS</span><span class="count-badge">{{ chat_count }}</span><span class="list-order">Recent first</span></div>
+      <div class="list-heading"><span>{{ section|upper }}</span><span class="count-badge">{{ chat_count }}</span><span class="list-order">Recent first</span></div>
       <div class="chat-scroll" data-scroll-region="chats" data-scroll-viewport>
         <div class="chat-list" data-scroll-list>
           {% include 'chat_rows.html' %}

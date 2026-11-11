@@ -154,7 +154,15 @@ def scroll_footer(path, params, offset, has_more, older=False, offset_key="offse
     return Markup(f'<div class="scroll-footer"><p data-scroll-status role="status">{label}</p></div>')
 
 
-async def sidebar_data(session, offset=0):
+def sidebar_filter(section):
+    if section == "groups":
+        return (Chat.kind.in_(["Chat", "PeerChat"])) | (Chat.is_group.is_(True))
+    if section == "channels":
+        return Chat.kind.in_(["Channel", "PeerChannel"]) & Chat.is_group.is_(False)
+    return Chat.kind.in_(["User", "PeerUser"])
+
+
+async def sidebar_data(session, section="chats", offset=0):
     latest = (select(Message.chat_id, func.max(Message.sent_at).label("sent_at"))
               .group_by(Message.chat_id).subquery())
     preview = (select(Version.body).join(Message, Message.latest_id == Version.id)
@@ -162,6 +170,7 @@ async def sidebar_data(session, offset=0):
                .limit(1).correlate(Chat).scalar_subquery())
     records = (await session.execute(select(Chat, latest.c.sent_at, preview)
                .outerjoin(latest, latest.c.chat_id == Chat.id)
+               .where(sidebar_filter(section))
                .order_by(latest.c.sent_at.desc(), Chat.id.desc()).offset(offset).limit(51))).all()
     return [dict(chat=chat, latest_at=sent_at, preview=body) for chat, sent_at, body in records[:50]], len(records) > 50
 
@@ -169,18 +178,21 @@ async def sidebar_data(session, offset=0):
 async def render_page(request, title, content_template, view, status=200, **context):
     offset = integer(request.query.get("offset")) if view == "home" else 0
     current = context.get("current")
+    section = request.path.strip("/") if request.path in {"/groups", "/channels"} else "chats"
+    if current and isinstance(current, Chat):
+        section = "groups" if current.kind in {"Chat", "PeerChat"} or current.is_group else ("channels" if current.kind in {"Channel", "PeerChannel"} else "chats")
     # In-app conversation navigation keeps the existing sidebar and app shell.
     if request.headers.get("X-Archive-Fragment") == "workspace" and view in {"chat", "message"}:
         async with request.app["db"].session() as session:
             photos = await avatar_versions(session, request.app["config"].data_dir, [current.id])
         html = TEMPLATES.get_template("workspace.html").render(
             title=title, content_template=content_template, view=view,
-            current_chat_id=current.id, avatar_versions=photos, **context)
+            current_chat_id=current.id, avatar_versions=photos, section=section, **context)
         return web.Response(text=html, content_type="text/html", status=status,
                             headers={"Vary": "X-Archive-Fragment"})
     async with request.app["db"].session() as session:
-        sidebar_chats, more = await sidebar_data(session, offset)
-        chat_count = await session.scalar(select(func.count()).select_from(Chat))
+        sidebar_chats, more = await sidebar_data(session, section, offset)
+        chat_count = await session.scalar(select(func.count()).select_from(Chat).where(sidebar_filter(section)))
         ids = [row["chat"].id for row in sidebar_chats] + ([current.id] if current else [])
         photos = await avatar_versions(session, request.app["config"].data_dir, ids)
     collector = request.app["collector"]
@@ -189,14 +201,15 @@ async def render_page(request, title, content_template, view, status=200, **cont
     html = TEMPLATES.get_template("base.html").render(
         title=title, content_template=content_template, view=view,
         current_chat_id=current.id if current else None, sidebar_chats=sidebar_chats,
-        sidebar_footer=scroll_footer("/", {}, offset, more), chat_count=chat_count,
+        sidebar_footer=scroll_footer("/" if section == "chats" else "/" + section, {}, offset, more), chat_count=chat_count, section=section,
         connected=connected, avatar_versions=photos, **context)
     return web.Response(text=html, content_type="text/html", status=status,
                         headers={"Vary": "X-Archive-Fragment"})
 
 
 async def chats(request):
-    return await render_page(request, "Chats", "home.html", "home")
+    title = request.path.strip("/").capitalize() or "Chats"
+    return await render_page(request, title, "home.html", "home")
 
 
 def render_message(message, versions, attachments, senders, profiles, saved_reactions,
@@ -521,7 +534,7 @@ def make_app(db, config, collector):
     setup = Setup(db, config, collector)
     app["setup"] = setup
     app.on_shutdown.append(setup.cleanup)
-    app.add_routes([web.static("/static", Path(__file__).parent / "static"), web.get("/", chats),
+    app.add_routes([web.static("/static", Path(__file__).parent / "static"), web.get("/", chats), web.get("/groups", chats), web.get("/channels", chats),
                     web.get(r"/chat/{chat_id:-?\d+}", chat),
                     web.get(r"/message/{chat_id:-?\d+}/{message_id:\d+}", message),
                     web.get("/search", search), web.get("/status", status), web.get("/health", health),

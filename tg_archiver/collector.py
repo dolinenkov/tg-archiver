@@ -225,6 +225,7 @@ class Collector:
                     await session.flush()
                 chat.title = dialog.name or str(dialog.id)
                 chat.kind = type(dialog.entity).__name__
+                chat.is_group = bool(getattr(dialog.entity, "megagroup", False) or getattr(dialog.entity, "gigagroup", False))
                 chat.enabled = self.config.included(dialog.id)
                 if chat.config_hash != fingerprint:
                     chat.cursor, chat.done, chat.error = 0, False, ""

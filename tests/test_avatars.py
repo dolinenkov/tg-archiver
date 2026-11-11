@@ -205,7 +205,8 @@ class AvatarTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await response.read(), b"\xff\xd8avatar\xff\xd9")
             body = await (await client.get('/chat/42')).text()
             self.assertEqual(body.count('src="/avatar/42?v=123"'), 2)
-            self.assertIn('data-avatar-chat="-7" data-avatar-version=""', body)
+            group_body = await (await client.get('/groups')).text()
+            self.assertIn('data-avatar-chat="-7" data-avatar-version=""', group_body)
             self.assertEqual(await (await client.get('/avatars?ids=42,-7,999')).json(), {"42": "123", "-7": "", "999": ""})
             for path in ['/avatars?ids=abc', '/avatars?ids=' + ','.join(str(i) for i in range(101)), '/avatars?ids=' + '9' * 30]:
                 self.assertEqual((await client.get(path)).status, 400)

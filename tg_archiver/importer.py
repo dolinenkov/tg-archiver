@@ -162,7 +162,7 @@ def read_export(path, config):
             reply_to = integer(record["reply_to_message_id"]) if record.get("reply_to_message_id") else None
             if record.get("reply_to_peer_id") and peer(record["reply_to_peer_id"]) != chat_id:
                 reply_to = None
-            plan.append(dict(chat_id=chat_id, kind=db_kind, title=title, telegram_id=message_id,
+            plan.append(dict(chat_id=chat_id, kind=db_kind, is_group=kind in {"private_supergroup", "public_supergroup"}, title=title, telegram_id=message_id,
                              sent_at=sent, source_at=edited, sender_id=sender, sender_name=sender_name,
                              reply_to=reply_to,
                              body=body, attachment=attachment, raw=record, included=config.included(chat_id)))
@@ -226,9 +226,13 @@ async def import_export(config, path, dry_run=False, db=None):
 
 async def save_imported(session, config, item):
     chat_id = item["chat_id"]
-    if not await session.get(Chat, chat_id):
-        session.add(Chat(id=chat_id, kind=item["kind"], title=item["title"]))
+    chat = await session.get(Chat, chat_id)
+    if not chat:
+        chat = Chat(id=chat_id, kind=item["kind"], title=item["title"], is_group=item["is_group"])
+        session.add(chat)
         await session.flush()
+    elif item["is_group"]:
+        chat.is_group = True
     if item["sender_id"] is not None and not await session.get(Sender, item["sender_id"]):
         session.add(Sender(id=item["sender_id"], name=item["sender_name"]))
     await queue_profile(session, chat_id, name=item["title"])

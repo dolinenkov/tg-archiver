@@ -22,6 +22,7 @@ class Chat(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
     kind: Mapped[str] = mapped_column(String)
     title: Mapped[str] = mapped_column(Text)
+    is_group: Mapped[bool] = mapped_column(default=False)
     cursor: Mapped[int] = mapped_column(default=0)
     done: Mapped[bool] = mapped_column(default=False)
     enabled: Mapped[bool] = mapped_column(default=True)
@@ -169,6 +170,9 @@ class Database:
         async with self.engine.begin() as connection:
             await connection.exec_driver_sql("PRAGMA journal_mode=WAL")
             await connection.run_sync(Base.metadata.create_all)
+            columns = (await connection.exec_driver_sql("PRAGMA table_info(chats)")).fetchall()
+            if not any(column[1] == "is_group" for column in columns):
+                await connection.exec_driver_sql("ALTER TABLE chats ADD COLUMN is_group BOOLEAN NOT NULL DEFAULT 0")
             await connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_chat_timeline ON messages(chat_id,sent_at,telegram_id)")
             await connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_version_attachments_attachment_id ON version_attachments(attachment_id)")
             await connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_transcriptions_source ON transcriptions(source_chat_id,source_message_id)")
